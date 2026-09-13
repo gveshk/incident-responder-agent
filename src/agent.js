@@ -3,6 +3,7 @@ import * as linearClient from "./integrations/linear.js";
 import * as slackClient from "./integrations/slack.js";
 import * as githubClient from "./integrations/github.js";
 import * as hubspotClient from "./integrations/hubspot.js";
+import * as sentryClient from "./integrations/sentry.js";
 import { classifyTier, rollback, hold, TIERS } from "./rollback.js";
 import { reconcile } from "./memory.js";
 import { buildMockSentryPayload } from "./mock-trigger.js";
@@ -10,10 +11,13 @@ import { buildMockSentryPayload } from "./mock-trigger.js";
 /**
  * Runs one incident-response cycle:
  *
- *   mock Sentry trigger
+ *   Sentry trigger (mock payload, or --sentry: the latest real unresolved issue)
  *        │
  *        ▼
  *   Linear ticket (act -> verify)
+ *        │
+ *        ▼
+ *   Sentry note linking the ticket (only for a real Sentry trigger; act -> verify)
  *        │
  *        ▼
  *   Slack alert (act -> verify)
@@ -35,7 +39,7 @@ import { buildMockSentryPayload } from "./mock-trigger.js";
  * injected so this can run against real APIs or fully mocked ones (used
  * by the eval harness and this file's own tests).
  */
-export async function runIncident({ trigger = buildMockSentryPayload(), integrations = { linear: linearClient, slack: slackClient, github: githubClient, hubspot: hubspotClient }, factStore = [] } = {}) {
+export async function runIncident({ trigger = buildMockSentryPayload(), integrations = { linear: linearClient, slack: slackClient, github: githubClient, hubspot: hubspotClient, sentry: sentryClient }, factStore = [] } = {}) {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const steps = [];
@@ -51,6 +55,11 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
   const diagnosis = `Error spike detected: ${trigger.errorType} in ${trigger.service} (${trigger.eventCount} events in ${trigger.windowMinutes}m).`;
 
   const linearResult = await runStep("linear.issueCreate", { title: `[Incident] ${trigger.service}: ${trigger.errorType}`, description: diagnosis }, { description: diagnosis });
+
+  if (trigger.sentryIssueId) {
+    const noteText = `Incident Responder: tracking in Linear ${linearResult.raw.url ?? linearResult.id}`;
+    await runStep("sentry.noteCreate", { issueId: trigger.sentryIssueId, text: noteText }, { text: noteText });
+  }
 
   const slackText = `:rotating_light: Incident: ${trigger.service} — ${trigger.errorType}. Linear ticket: ${linearResult.raw.url ?? linearResult.id}`;
   await runStep("slack.postMessage", { text: slackText }, { text: slackText });
@@ -74,7 +83,7 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
  * (bufferable) and memory steps are skipped — there's nothing to fire in
  * reverse for either.
  */
-export async function undoRun(runLog, integrations = { linear: linearClient, slack: slackClient, github: githubClient, hubspot: hubspotClient }) {
+export async function undoRun(runLog, integrations = { linear: linearClient, slack: slackClient, github: githubClient, hubspot: hubspotClient, sentry: sentryClient }) {
   const results = [];
   for (const step of [...runLog.steps].reverse()) {
     if (step.tier === TIERS.BUFFERABLE || step.actionType === "memory.reconcile") continue;

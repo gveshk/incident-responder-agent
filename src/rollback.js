@@ -22,6 +22,7 @@ const TIER_BY_ACTION_TYPE = {
   "linear.issueUpdate": TIERS.REVERSIBLE,
   "github.issueCreate": TIERS.REVERSIBLE,
   "hubspot.propertyUpdate": TIERS.REVERSIBLE,
+  "sentry.noteCreate": TIERS.REVERSIBLE,
   "slack.postMessage": TIERS.COMPENSABLE,
   "pagerduty.page": TIERS.BUFFERABLE,
 };

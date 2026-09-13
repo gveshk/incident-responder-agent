@@ -4,7 +4,7 @@ A demo agent for the Multi-App AI Agent Hackathon, built to prove one idea:
 
 > **Every action an agent takes gets logged, classified, independently verified, and is reversible.** Git blame and git revert, for the real world your agent touches.
 
-The agent itself is deliberately simple — one incident-response flow across Linear, Slack, HubSpot, and GitHub. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
+The agent itself is deliberately simple — one incident-response flow from a Sentry issue across Linear, Sentry, Slack, HubSpot, and GitHub. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
 
 ![Trust layer architecture](diagrams/trust-layer-architecture.png)
 
@@ -12,13 +12,16 @@ The agent itself is deliberately simple — one incident-response flow across Li
 
 ## What it does
 
-A mock Sentry "error spike" kicks off one incident-response cycle:
+A Sentry issue kicks off one incident-response cycle — the canned "error spike" payload by default (deterministic for rehearsal), or the latest real unresolved issue in your Sentry org with `--sentry`:
 
 ```
-mock Sentry trigger
+Sentry trigger       mock payload, or --sentry: latest real unresolved issue
       │
       ▼
 Linear ticket        act ─► verify                          [reversible]
+      │
+      ▼
+Sentry note          links the ticket on the issue (--sentry only)   [reversible]
       │
       ▼
 Slack alert          act ─► verify                          [compensable]
@@ -190,6 +193,17 @@ Running against the real APIs for the first time, the layer flagged three things
 2. **Linear's delete is a soft delete.** After `issueDelete` the id still resolves with `trashed: true`. `verify()` now treats trashed as non-existent, and `undo()` reports "moved to trash" instead of implying a hard delete.
 3. **GitHub not-found was read as `unknown`.** `gh issue view` exits non-zero for a deleted issue; that's a definitive `false`, not a timeout. Only unexplained errors stay `unknown` now.
 
+## Will this work in a real incident?
+
+The trust layer, yes — it has been exercised live against five real APIs and does not care where the incident came from. `--sentry` makes the whole flow real: the trigger is your latest unresolved Sentry issue (owner taken from the issue's assignee, else the project's team), the agent posts a note on that issue linking the Linear ticket, and every run is keyed by the Sentry issue id — a second run for the same issue is refused until the first is undone or the issue is resolved, so a re-fired alert cannot create two tickets.
+
+What is still demo-grade, stated plainly:
+
+- **No reasoning.** The diagnosis text is templated from the issue. A production responder would have a model read the stack trace and write the diagnosis — the trust layer is indifferent to that; it verifies actions, not prose.
+- **PagerDuty is held, never committed.** The bufferable gate is real (`hold().commit()` exists), but the demo never calls `commit()`. A real deployment would put a human approval in front of it.
+- **Wrong-record blind spot.** If an API stores a write under an id it never returns, the layer reports `false` but cannot reverse what it cannot address (see benchmark caveats).
+- **Single process, `.env` secrets, no rate-limit handling.** It is a CLI, not a service.
+
 ## Running it
 
 Requires Node ≥ 20 and the `gh` CLI, authenticated.
@@ -197,15 +211,16 @@ Requires Node ≥ 20 and the `gh` CLI, authenticated.
 ```bash
 npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
-npm test                 # 75 unit tests, all mocked
+npm test                 # 83 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
 npm run eval:competitive # the 9-product benchmark; regenerates eval/competitive/RESULTS.md
 
-node bin/cli.js                              # one live incident run → output/run-<ts>.json
+node bin/cli.js                              # one live run from the mock trigger → output/run-<ts>.json
+node bin/cli.js --sentry                     # same, triggered by your latest real unresolved Sentry issue
 node bin/cli.js --undo output/run-<ts>.json  # reverse it, step by step, most recent first
 ```
 
-Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property).
+Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property). For `--sentry`: `SENTRY_AUTH_TOKEN` (user token with `event:read`, `event:write`, `project:read`) and `SENTRY_ORG`.
 
 ## Layout
 
@@ -216,7 +231,8 @@ src/verifier.js            tri-state verify + canonicalization (pure)
 src/rollback.js            tiers, hold(), rollback(), agent-writable diff
 src/memory.js              fact store with supersededBy revision
 src/mock-trigger.js        canned Sentry payload
-src/integrations/          linear.js, github.js, slack.js, hubspot.js — act / verify / undo
+src/integrations/          linear.js, github.js, slack.js, hubspot.js, sentry.js — act / verify / undo
+                           (sentry.js also exports fetchTrigger for the --sentry path)
 eval/                      fault-injection, rollback-fidelity, memory-scenarios,
                            tri-state-coverage, calibration, adversarial, latency-cost
 eval/competitive/          simulator (seeded faults + ground truth), strategies, memory-bench, run

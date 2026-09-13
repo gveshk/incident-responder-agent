@@ -15,7 +15,7 @@ function fakeIntegration(name) {
 }
 
 test("runIncident executes all steps in order with tier classifications", async () => {
-  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot") };
+  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry") };
   const factStore = createFactStore([{ subject: "checkout-api", predicate: "ownedBy", object: "team-checkout", source: "seed", confidence: 0.6 }]);
   const runLog = await runIncident({ integrations, factStore });
 
@@ -23,8 +23,20 @@ test("runIncident executes all steps in order with tier classifications", async 
   assert.deepEqual(actionTypes, ["linear.issueCreate", "slack.postMessage", "hubspot.propertyUpdate", "pagerduty.page", "memory.reconcile", "github.issueCreate"]);
 });
 
+test("a real Sentry trigger adds a sentry.noteCreate step right after the Linear ticket; the mock trigger does not", async () => {
+  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry") };
+  const mockRun = await runIncident({ integrations, factStore: createFactStore([]) });
+  assert.ok(!mockRun.steps.some((s) => s.actionType === "sentry.noteCreate"));
+  const trigger = { service: "javascript-nextjs", errorType: "TypeError", eventCount: 1, windowMinutes: 5, reportedOwner: "barebone-agents", escalationPolicy: "x", sentryIssueId: "7729975167", sentryUrl: "https://sentry.example/1" };
+  const realRun = await runIncident({ trigger, integrations, factStore: createFactStore([]) });
+  const types = realRun.steps.map((s) => s.actionType);
+  assert.equal(types[0], "linear.issueCreate");
+  assert.equal(types[1], "sentry.noteCreate");
+  assert.equal(realRun.steps[1].input.issueId, "7729975167");
+});
+
 test("the PagerDuty step is held, never fired", async () => {
-  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot") };
+  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry") };
   const runLog = await runIncident({ integrations, factStore: createFactStore([]) });
   const pageStep = runLog.steps.find((s) => s.actionType === "pagerduty.page");
   assert.equal(pageStep.tier, TIERS.BUFFERABLE);
@@ -32,7 +44,7 @@ test("the PagerDuty step is held, never fired", async () => {
 });
 
 test("memory reconciles the seeded stale fact against the trigger's reported owner", async () => {
-  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot") };
+  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry") };
   const factStore = createFactStore([{ subject: "checkout-api", predicate: "ownedBy", object: "team-checkout", source: "seed", confidence: 0.6 }]);
   const runLog = await runIncident({ integrations, factStore });
   const memoryStep = runLog.steps.find((s) => s.actionType === "memory.reconcile");
@@ -41,7 +53,7 @@ test("memory reconciles the seeded stale fact against the trigger's reported own
 });
 
 test("every mutating step carries a tri-state verifyResult, never a bare boolean", async () => {
-  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot") };
+  const integrations = { linear: fakeIntegration("linear"), slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry") };
   const runLog = await runIncident({ integrations, factStore: createFactStore([]) });
   for (const step of runLog.steps) {
     if (step.verifyResult) assert.ok(["true", "false", "unknown"].includes(step.verifyResult.status));
