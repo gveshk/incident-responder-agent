@@ -31,8 +31,9 @@ export async function act(input) {
   const data = await hubspotRequest("PATCH", `/${objectId}`, { properties: { [input.property]: input.value } });
   let url = null;
   try {
-    const { portalId } = await hubspotRequest("GET", "", null, "https://api.hubapi.com/account-info/v3/details");
-    url = `https://app.hubspot.com/contacts/${portalId}/company/${data.id}`;
+    // uiDomain matters: portals live on hublets (app-na2.hubspot.com, app-eu1…) and app.hubspot.com bounces to login.
+    const { portalId, uiDomain } = await hubspotRequest("GET", "", null, "https://api.hubapi.com/account-info/v3/details");
+    url = `https://${uiDomain ?? "app.hubspot.com"}/contacts/${portalId}/company/${data.id}`;
   } catch { /* cosmetic only */ }
   return {
     id: data.id,
