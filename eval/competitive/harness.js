@@ -58,8 +58,11 @@ export async function runCompetitive({ trials = 1000, faultRate = 0.3, readFault
 
     results.push({
       name: strategy.name,
-      represents: strategy.represents,
-      describe: strategy.describe,
+      product: strategy.product,
+      url: strategy.url,
+      pattern: strategy.pattern,
+      behavior: strategy.behavior,
+      note: strategy.note ?? "",
       ...m,
       wrongOutcomes: m.silentFailures + m.caught,
       catchRate: m.silentFailures + m.caught ? m.caught / (m.silentFailures + m.caught) : 1,

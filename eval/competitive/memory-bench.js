@@ -2,48 +2,77 @@ import { createFactStore, reconcile } from "../../src/memory.js";
 import { makeRng } from "./simulator.js";
 
 /**
- * Append-only notes (what most agent memory tools do on `add`: embed the
- * text, store it, retrieve top-k by similarity later) versus the
- * reconciling fact store in src/memory.js.
+ * Three ways agents remember a fact that can change, scored on the same
+ * timeline: S services, each observed K times; some observations change
+ * the owner (a real transfer), most confirm it. Then ask "who owns
+ * <service>?" for every service.
  *
- * Scenario: S services, each observed K times over a timeline. Some
- * observations change the owner (a real ownership transfer), most confirm
- * the current one. Then ask "who owns <service>?" for every service.
+ *   vector-store notes   add() embeds and stores every observation; top-k by
+ *                        similarity at query time. Contradicting notes embed
+ *                        almost identically, so top-k returns a mix.
+ *   mem0 (best case)     an LLM decides ADD / UPDATE / DELETE / NOOP per
+ *                        fact against retrieved memories. Modeled with
+ *                        perfect decisions and zero latency. On contradiction
+ *                        the old memory is deleted — no history is kept.
+ *   memory.js            deterministic reconcile(); contradiction → revise,
+ *                        old fact kept and linked by supersededBy.
  *
- * Contradicting notes about the same subject/predicate embed almost
- * identically, so top-k retrieval returns a mix — the model downstream has
- * to guess. We score:
+ * Scored:
  *   contradictoryContexts  queries whose top-k contained >1 distinct answer
  *   revisionsDetected      ownership changes the memory *knew* were changes
  *   falseRevisions         confirmations wrongly treated as changes
- *   activeFacts / notes    what a query has to scan
+ *   historyRetained        superseded facts still readable
+ *   llmCallsPerAdd         non-determinism and cost at write time
  */
+export const MEMORY_PRODUCTS = [
+  { name: "vector-store-notes", product: "Vector-store notes (Chroma / Pinecone via LangChain VectorStoreRetrieverMemory)", url: "https://python.langchain.com/api_reference/langchain/memory/langchain.memory.vectorstore.VectorStoreRetrieverMemory.html" },
+  { name: "mem0", product: "mem0 (LLM-resolved ADD/UPDATE/DELETE/NOOP), best case", url: "https://docs.mem0.ai/core-concepts/memory-operations/add" },
+  { name: "memory-js", product: "this repo (src/memory.js)", url: "https://github.com/gveshk/incident-responder-agent" },
+];
+
 export function runMemoryBench({ services = 25, observationsPerService = 12, changeRate = 0.2, topK = 3, seed = 7 } = {}) {
   const rng = makeRng(seed);
   const timeline = [];
-  const truth = {}; // service -> current owner
+  const truth = {};
   let changes = 0;
   for (let s = 0; s < services; s++) {
     const subject = `service-${s}`;
     let owner = `team-${s % 6}`;
-    truth[subject] = owner;
     for (let k = 0; k < observationsPerService; k++) {
       if (k > 0 && rng() < changeRate) { owner = `team-${Math.floor(rng() * 6)}-v${k}`; changes += 1; }
       truth[subject] = owner;
       timeline.push({ subject, predicate: "ownedBy", object: owner, source: `obs-${k}` });
     }
   }
+  const subjects = Object.keys(truth);
+  const contradictory = (hits) => new Set(hits.map((h) => h.object)).size > 1;
 
-  // --- Baseline: append-only notes, top-k by similarity (ties → arbitrary, modeled as insertion order)
-  const notes = [];
-  for (const obs of timeline) notes.push({ ...obs });
-  let contradictoryAppend = 0;
-  for (const subject of Object.keys(truth)) {
-    const hits = notes.filter((n) => n.subject === subject && n.predicate === "ownedBy").slice(0, topK);
-    if (new Set(hits.map((h) => h.object)).size > 1) contradictoryAppend += 1;
+  // --- vector-store notes: append every observation; top-k by similarity (ties → insertion order)
+  const notes = timeline.map((o) => ({ ...o }));
+  let vsContradictory = 0;
+  for (const subject of subjects) {
+    const hits = notes.filter((n) => n.subject === subject).slice(0, topK);
+    if (contradictory(hits)) vsContradictory += 1;
   }
 
-  // --- Reconciling fact store
+  // --- mem0 best case: perfect LLM op per add; DELETE+ADD on contradiction, NOOP on confirmation
+  const mem0 = new Map(); // subject -> single memory
+  let mem0Revisions = 0, mem0False = 0, mem0LlmCalls = 0;
+  for (const obs of timeline) {
+    mem0LlmCalls += 1; // one LLM decision per add()
+    const existing = mem0.get(obs.subject);
+    if (!existing) { mem0.set(obs.subject, { ...obs }); continue; } // ADD
+    if (existing.object === obs.object) continue; // NOOP
+    mem0.set(obs.subject, { ...obs }); mem0Revisions += 1; // DELETE old + ADD new
+  }
+  let mem0Contradictory = 0, mem0Correct = 0;
+  for (const subject of subjects) {
+    const hits = [mem0.get(subject)];
+    if (contradictory(hits)) mem0Contradictory += 1;
+    if (hits[0]?.object === truth[subject]) mem0Correct += 1;
+  }
+
+  // --- memory.js reconcile
   const store = createFactStore([]);
   let revisionsDetected = 0, falseRevisions = 0;
   const seen = {};
@@ -55,35 +84,22 @@ export function runMemoryBench({ services = 25, observationsPerService = 12, cha
     if (r.revised && !wasChange) falseRevisions += 1;
   }
   const active = store.filter((f) => !f.supersededBy);
-  let contradictoryReconciled = 0, correctReconciled = 0;
-  for (const [subject, owner] of Object.entries(truth)) {
-    const hits = active.filter((f) => f.subject === subject && f.predicate === "ownedBy").slice(0, topK);
-    if (new Set(hits.map((h) => h.object)).size > 1) contradictoryReconciled += 1;
-    if (hits.length === 1 && hits[0].object === owner) correctReconciled += 1;
+  let rcContradictory = 0, rcCorrect = 0;
+  for (const subject of subjects) {
+    const hits = active.filter((f) => f.subject === subject).slice(0, topK);
+    if (contradictory(hits)) rcContradictory += 1;
+    if (hits.length === 1 && hits[0].object === truth[subject]) rcCorrect += 1;
   }
 
   return {
     services, observations: timeline.length, ownershipChanges: changes, topK,
-    appendOnly: {
-      represents: "mem0-style add(), notes in a vector store, RAG over a scratchpad",
-      notes: notes.length,
-      contradictoryContexts: contradictoryAppend,
-      contradictoryContextRate: contradictoryAppend / services,
-      revisionsDetected: 0,
-      revisionSignal: "none — add() cannot tell a confirmation from a contradiction",
-    },
-    reconciling: {
-      represents: "src/memory.js reconcile()",
-      notes: store.length,
-      activeFacts: active.length,
-      contradictoryContexts: contradictoryReconciled,
-      contradictoryContextRate: contradictoryReconciled / services,
-      currentOwnerCorrect: correctReconciled,
-      currentOwnerCorrectRate: correctReconciled / services,
-      revisionsDetected,
-      revisionRecall: changes ? revisionsDetected / changes : 1,
-      falseRevisions,
-      historyRetained: store.length - active.length,
-    },
+    rows: [
+      { ...MEMORY_PRODUCTS[0], stored: notes.length, contradictoryContexts: vsContradictory, currentCorrect: null, revisionsDetected: 0, falseRevisions: null, historyRetained: notes.length - subjects.length, llmCallsPerAdd: 0, deterministic: true,
+        note: "add() cannot tell a confirmation from a contradiction; the model downstream has to pick" },
+      { ...MEMORY_PRODUCTS[1], stored: mem0.size, contradictoryContexts: mem0Contradictory, currentCorrect: mem0Correct, revisionsDetected: mem0Revisions, falseRevisions: mem0False, historyRetained: 0, llmCallsPerAdd: 1, deterministic: false,
+        note: "modeled with perfect LLM decisions; real runs are non-deterministic and DELETE loses the old value" },
+      { ...MEMORY_PRODUCTS[2], stored: store.length, contradictoryContexts: rcContradictory, currentCorrect: rcCorrect, revisionsDetected, falseRevisions, historyRetained: store.length - active.length, llmCallsPerAdd: 0, deterministic: true,
+        note: "" },
+    ],
   };
 }

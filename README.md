@@ -133,59 +133,54 @@ and register its action types in `TIER_BY_ACTION_TYPE`. `src/agent.js` orchestra
 
 Evals run against the verifier and rollback engine directly with in-memory fixtures — repeatable, no API calls. The live flow is exercised separately (below).
 
-## Competitive benchmark: why not just retry, validate, or ask an LLM?
+## Competitive benchmark: nine products, same faults, same ground truth
 
-`npm run eval:competitive` runs the same 1,000 create-actions, with the same seeded fault schedule, through five strategies. Four of them are faithful models of what widely deployed tooling actually does for a tool call; the fifth is this layer (calling the real `verifier.js` / `rollback.js`). Ground truth comes from the simulator's own store, so every strategy is scored on what *happened*, not what the API said.
+`npm run eval:competitive` runs 1,000 create-actions with one seeded fault schedule through nine shipping products' documented defaults and through this layer (which calls the real `verifier.js` / `rollback.js`). Ground truth comes from the simulator's own store, so every row is scored on what *happened*, not what the API said. Full tables with the exact behavior modeled per product, the by-fault breakdown, and caveats are generated into [`eval/competitive/RESULTS.md`](eval/competitive/RESULTS.md).
 
-| Strategy | Represents | How it decides "done" |
-|---|---|---|
-| `status-trust` | Composio / Arcade / MCP tool execution, LangChain tool wrappers | `res.ok` |
-| `retry-replay` | tenacity, LiteLLM `num_retries`, LangGraph checkpoint replay, Temporal activity retry | re-run on any error, ≤3 attempts |
-| `schema-validation` | Guardrails AI, Openlayer, Pydantic output models | response is well-formed |
-| `response-judge` | LLM-as-judge on the tool result (Arize / Langfuse pattern), modeled at its **best case**: a perfect reader of the response | response payload matches intent |
-| `trust-layer` | this repo | independent read-back → tri-state → rollback / escalate |
+Faults at 30%: fake-200 (nothing stored), truncated on save, wrong-record (stored, returned id points nowhere), timeout after the write happened, transient 503 before it. Read path 2% flaky.
 
-Faults injected at 30%: fake-200 (nothing stored), truncated on save, wrong-record (stored, but the returned id points nowhere), timeout after the write happened, transient 503 before it. The read path is 2% flaky so `unknown` has a real cost.
+**Accuracy** (1,000 actions, 277 faults injected)
 
-**Accuracy**
-
-| strategy | silent failures | catch rate | orphaned writes | escalated | duplicates | partials left | end state correct |
+| product | pattern | silent failures | catch rate | orphaned writes | duplicates | end state correct | calls / action |
 |---|---|---|---|---|---|---|---|
-| status-trust | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
-| retry-replay | 225 | 0.0% | 0 | 0 | **61** | 49 | 77.5% |
-| schema-validation | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
-| response-judge | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
-| **trust-layer** | **0** | **100%** | 48 | 84 | **0** | 2 | **86.9%** |
+| [Composio](https://docs.composio.dev/) | status trust | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| [Arcade.dev](https://docs.arcade.dev/) | status trust | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/tools/) | status trust | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| [LangGraph RetryPolicy](https://reference.langchain.com/python/langgraph/types/RetryPolicy) | retry / replay | 225 | 0.0% | 0 | **61** | 77.5% | 1.11 |
+| [Temporal activity retry](https://docs.temporal.io/encyclopedia/retry-policies) | retry / replay | 225 | 0.0% | 0 | **61** | 77.5% | 1.11 |
+| [tenacity](https://github.com/jd/tenacity) | retry / replay | 225 | 0.0% | 0 | **61** | 77.5% | 1.11 |
+| [Guardrails AI](https://github.com/guardrails-ai/guardrails) | schema validation | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| [Pydantic AI](https://ai.pydantic.dev/tools/) | schema validation | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| [LLM-as-judge (Langfuse / Arize)](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge) | response judge, best case | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
+| **trust layer (this repo)** | independent read-back | **0** | **100%** | 48 | **0** | **86.9%** | 2.04 |
+
+- *silent failures*: reality was wrong and the product told the agent "done". *orphaned writes*: the product said "failed" but a record exists the agent doesn't know about. *end state correct*: what the agent was told matches reality and nothing half-done remains.
 
 Silent failures by fault type (missed / injected):
 
-| strategy | fake-200 | truncated | wrong-record | timeout | 503 |
+| pattern | fake-200 | truncated | wrong-record | timeout | 503 |
 |---|---|---|---|---|---|
-| every response-only baseline | 64/64 | 49/49 | 51/51 | 0/61 (retry-replay: 61/61) | 0/52 |
-| trust-layer | 0/64 | 0/49 | 0/51 | 0/61 | 0/52 |
+| status trust (Composio, Arcade, OpenAI Agents SDK) | 64/64 | 49/49 | 51/51 | 0/61 | 0/52 |
+| retry / replay (LangGraph, Temporal, tenacity) | 64/64 | 49/49 | 51/51 | **61/61** | 0/52 |
+| schema validation (Guardrails AI, Pydantic AI) | 64/64 | 49/49 | 51/51 | 0/61 | 0/52 |
+| response judge (LLM-as-judge) | 64/64 | 49/49 | 51/51 | 0/61 | 0/52 |
+| **trust layer** | **0/64** | **0/49** | **0/51** | **0/61** | **0/52** |
 
-The structural point: **four of the five only ever look at the write's own response.** A fake-200 echoes the intent back perfectly, so status checks, schema validators and even a perfect judge are blind to it by construction. Retrying makes it worse: a timeout after a successful write becomes a duplicate ticket 61 times out of 61.
+The structural point: **every one of the nine only ever reads the write's own response.** A fake-200 echoes the intent back perfectly, so status checks, schema validators and even a perfect judge are blind to it by construction. Retry frameworks make it worse: a timeout after a successful write becomes a duplicate record 61 times out of 61, because the framework cannot tell a timeout-after-write from a 503-before-write. This layer can, because it reads back.
 
-**Time (the verifier tax)**
+**Time (the verifier tax)** — one extra read per action: 2.00 calls and 180ms vs 1.00 and 120ms on a clean run (+50%). That is the price; the tables above are what it buys.
 
-| strategy | calls/action | ms/action (sim: write 120, read 60) |
-|---|---|---|
-| status-trust / schema / judge | 1.00 | 120 |
-| retry-replay | 1.11 | 134 |
-| trust-layer | 2.04 | 187 |
+**Memory** — 25 services, 300 observations, 45 real ownership changes, top-3 retrieval:
 
-One extra read per action, ~+50% latency on a clean run. That is the price; the tables above are what it buys.
+| product | stored | contradictory context | changes detected | history retained | LLM calls / add | deterministic |
+|---|---|---|---|---|---|---|
+| [Vector-store notes (Chroma / Pinecone via LangChain)](https://python.langchain.com/api_reference/langchain/memory/langchain.memory.vectorstore.VectorStoreRetrieverMemory.html) | 300 | 13 (52%) | 0/45 | implicit, unlinked | 0 | yes |
+| [mem0, best case](https://docs.mem0.ai/core-concepts/memory-operations/add) | 25 | 0 | 45/45 | 0 (DELETE on contradiction) | 1 | no |
+| **memory.js (this repo)** | 70 | **0** | **45/45** | **45, linked via supersededBy** | 0 | yes |
 
-**Memory** — append-only notes (mem0-style `add()`, notes in a vector store) vs `memory.js`, over 25 services × 12 observations with 45 real ownership changes, top-3 retrieval:
+mem0 is the honest comparison here: it does resolve conflicts, but with an LLM call per `add()` (non-deterministic, and [known to delete memories you still need](https://dev.to/mukesh_13/mem0-auto-resolves-memory-conflicts-for-you-until-it-silently-deletes-one-you-still-need-4f4m)) and no retained history. `memory.js` gets the same current-owner accuracy deterministically, with the old fact kept and linked.
 
-| metric | append-only | reconciling store |
-|---|---|---|
-| notes stored | 300 | 70 (25 active + 45 superseded) |
-| queries whose retrieved context contradicts itself | 13 (52%) | 0 |
-| ownership changes detected as revisions | 0 (`add()` can't tell a confirmation from a contradiction) | 45/45 |
-| confirmations mistaken for changes | n/a | 0 |
-
-**Honest caveats.** The 48 "orphaned writes" for the trust layer are all wrong-record cases: it correctly reports `false`, but the stray record lives under an id it was never given, so it can't reverse it — a content search as a second source would close that gap and is not implemented. The 84 escalations are 61 timeouts plus read-path failures: those go to a human instead of being guessed, which is the design. The LLM-judge baseline is modeled, not called; a real model can only do worse than a perfect reader of the same response, and adds latency and non-determinism. Append-only top-k ties are broken by insertion order; any tie-break yields contradictory context whenever two owners are among the k most similar notes.
+**Caveats, in writing.** The trust layer's 48 orphaned writes are all wrong-record cases: it correctly reports `false`, but the stray record lives under an id it was never given, so it can't reverse it — a content search as a second source would close that and isn't implemented. Its 84 escalations are 61 timeouts plus read-path failures, handed to a human instead of guessed. Retry rows are pinned to 3 attempts (LangGraph's default; Temporal's is unlimited). LLM-judge and mem0 are modeled at their best case, not called.
 
 ### What the first live run caught
 
@@ -204,7 +199,7 @@ npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
 npm test                 # 75 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
-npm run eval:competitive # the benchmark above (more trials: node eval/competitive/run.js 5000)
+npm run eval:competitive # the 9-product benchmark; regenerates eval/competitive/RESULTS.md
 
 node bin/cli.js                              # one live incident run → output/run-<ts>.json
 node bin/cli.js --undo output/run-<ts>.json  # reverse it, step by step, most recent first
