@@ -26,7 +26,12 @@ export async function verify(actResult, intent, { exec } = {}) {
   try {
     const stdout = await gh(["issue", "view", String(actResult.id), "--repo", actResult.raw.repo, "--json", "number,title,body,state"], exec);
     issue = JSON.parse(stdout);
-  } catch {
+  } catch (err) {
+    // gh exits non-zero for a deleted issue too — that's a definitive
+    // "does not exist", not a timeout; only unexplained errors are unknown.
+    if (/Could not resolve to an issue/i.test(`${err.stderr ?? ""} ${err.message}`)) {
+      return verifyCore({ exists: false, content: null });
+    }
     return verifyCore({ exists: null, content: null });
   }
   return verifyCore({

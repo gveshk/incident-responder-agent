@@ -27,6 +27,13 @@ test("verify() returns true when the independent read matches", async () => {
   assert.equal(result.status, "true");
 });
 
+test("verify() returns false when gh reports the issue does not exist (seen live after delete)", async () => {
+  const err = new Error("gh failed"); err.stderr = "GraphQL: Could not resolve to an issue or pull request with the number of 1. (repository.issue)";
+  const exec = fakeExec([{ error: err }]);
+  const result = await verify({ id: 1, raw: { repo: "gveshk/incident-responder-demo" } }, { body: "b" }, { exec });
+  assert.equal(result.status, "false");
+});
+
 test("verify() returns unknown when gh itself fails", async () => {
   const exec = fakeExec([{ error: new Error("network down") }]);
   const result = await verify({ id: 7, raw: { repo: "gveshk/incident-responder-demo" } }, { body: "b" }, { exec });
