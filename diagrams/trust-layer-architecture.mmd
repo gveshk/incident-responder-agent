@@ -1,0 +1,23 @@
+graph TD
+  A["ANY AGENT<br/>agent.js — runStep per action<br/>(integrations injected)"]
+  I["INTEGRATION INTERFACE<br/>act(input) · verify(actResult, intent) · undo(actResult)<br/>one small file per app"]
+  X["EXTERNAL APPS<br/>Linear · Slack · HubSpot · GitHub<br/>+ any app that implements the interface"]
+  V["VERIFIER — verifier.js (pure)<br/>independent read-back, canonicalize, compare<br/>verdict: true / false / unknown + confidence"]
+  R["ROLLBACK — rollback.js<br/>tier per action type: reversible · compensable · bufferable · irreversible<br/>hold() gate for irreversible intents · outcome: restored / compensated / escalated"]
+  M["MEMORY — memory.js<br/>reconcile(): contradiction → revise<br/>old fact kept, linked by supersededBy"]
+  L[("RUN LOG — output/run-&lt;ts&gt;.json<br/>per step: intent · API result · verdict · tier<br/>enough on its own to re-verify or reverse")]
+  H["HUMAN<br/>unknown is escalated, never auto-retried"]
+
+  A -- "act" --> I
+  I -- "write" --> X
+  X -- "response — never trusted" --> I
+  I -- "re-read via a different path" --> X
+  I -- "exists? content match?" --> V
+  V -- "verdict + confidence" --> L
+  A -- "observations" --> M
+  M -- "revision events" --> L
+  A -- "irreversible intent" --> R
+  L -- "--undo: walk backward, most recent first" --> R
+  R -- "undo(actResult)" --> I
+  V -. "unknown" .-> H
+  R -. "escalated" .-> H

@@ -1,0 +1,17 @@
+graph TD
+  T[Mock Sentry trigger<br/>checkout-api error spike]
+  LN["1. Linear ticket<br/>act → read-back → verify<br/>[reversible]"]
+  SL["2. Slack alert<br/>act → history read → verify<br/>[compensable]"]
+  HS["3. HubSpot account flagged<br/>pre-state captured → PATCH → verify<br/>[reversible]"]
+  PD["4. PagerDuty page<br/>HELD, never fired<br/>[bufferable]"]
+  ME["5. Memory reconcile<br/>owner: team-checkout → team-payments<br/>old fact kept, superseded"]
+  GH["6. GitHub issue<br/>act → gh view → verify<br/>[reversible]"]
+  LOG[("Run log<br/>output/run-&lt;ts&gt;.json")]
+  UNDO["--undo run log<br/>GitHub → HubSpot → Slack → Linear<br/>restored / compensated / escalated"]
+
+  T --> LN --> SL --> HS --> PD --> ME --> GH --> LOG
+  LOG --> UNDO
+  UNDO -. "delete issue" .-> GH
+  UNDO -. "restore captured value" .-> HS
+  UNDO -. "delete, or threaded retraction" .-> SL
+  UNDO -. "trash (soft delete)" .-> LN

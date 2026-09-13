@@ -4,7 +4,11 @@ A demo agent for the Multi-App AI Agent Hackathon, built to prove one idea:
 
 > **Every action an agent takes gets logged, classified, independently verified, and is reversible.** Git blame and git revert, for the real world your agent touches.
 
-The agent itself is deliberately simple — one incident-response flow across Linear, Slack, and GitHub. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt.
+The agent itself is deliberately simple — one incident-response flow across Linear, Slack, HubSpot, and GitHub. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
+
+![Trust layer architecture](diagrams/trust-layer-architecture.png)
+
+*Editable sources: [`diagrams/trust-layer-architecture.excalidraw`](diagrams/trust-layer-architecture.excalidraw) (open at excalidraw.com) and the `.mmd` mermaid next to it.*
 
 ## What it does
 
@@ -14,20 +18,25 @@ A mock Sentry "error spike" kicks off one incident-response cycle:
 mock Sentry trigger
       │
       ▼
-Linear ticket        act ─► verify        [reversible]
+Linear ticket        act ─► verify                          [reversible]
       │
       ▼
-Slack alert          act ─► verify        [compensable]
+Slack alert          act ─► verify                          [compensable]
       │
       ▼
-PagerDuty page       HELD, never fired    [bufferable]
+HubSpot account      pre-state captured ─► act ─► verify    [reversible]
+      │
+      ▼
+PagerDuty page       HELD, never fired                      [bufferable]
       │
       ▼
 memory.reconcile     stale fact revised, old value kept visible
       │
       ▼
-GitHub issue         act ─► verify        [reversible]
+GitHub issue         act ─► verify                          [reversible]
 ```
+
+![Incident responder flow](diagrams/incident-responder-flow.png)
 
 Every mutating step is written to a run log with its rollback tier and a tri-state verification result. `--undo <run-log>` walks the log backwards and reverses every step it can, reporting exactly what happened to each one.
 
@@ -51,7 +60,7 @@ Canonicalization absorbs the ways real APIs rewrite content (Slack wraps URLs in
 
 | Tier | Meaning | Example here |
 |---|---|---|
-| `reversible` | undo restores the pre-state | Linear ticket, GitHub issue → deleted |
+| `reversible` | undo restores the pre-state | Linear ticket, GitHub issue → deleted; HubSpot property → captured value written back |
 | `compensable` | the artifact can be removed, but the effect (someone read it) can't be un-happened | Slack message → deleted, or a threaded retraction if delete fails |
 | `bufferable` | never fired; held at a gate until an explicit `commit()` | PagerDuty page — the demo never commits it |
 | `irreversible` | no undo can be offered; must be gated up front | not used in this demo |
@@ -124,6 +133,60 @@ and register its action types in `TIER_BY_ACTION_TYPE`. `src/agent.js` orchestra
 
 Evals run against the verifier and rollback engine directly with in-memory fixtures — repeatable, no API calls. The live flow is exercised separately (below).
 
+## Competitive benchmark: why not just retry, validate, or ask an LLM?
+
+`npm run eval:competitive` runs the same 1,000 create-actions, with the same seeded fault schedule, through five strategies. Four of them are faithful models of what widely deployed tooling actually does for a tool call; the fifth is this layer (calling the real `verifier.js` / `rollback.js`). Ground truth comes from the simulator's own store, so every strategy is scored on what *happened*, not what the API said.
+
+| Strategy | Represents | How it decides "done" |
+|---|---|---|
+| `status-trust` | Composio / Arcade / MCP tool execution, LangChain tool wrappers | `res.ok` |
+| `retry-replay` | tenacity, LiteLLM `num_retries`, LangGraph checkpoint replay, Temporal activity retry | re-run on any error, ≤3 attempts |
+| `schema-validation` | Guardrails AI, Openlayer, Pydantic output models | response is well-formed |
+| `response-judge` | LLM-as-judge on the tool result (Arize / Langfuse pattern), modeled at its **best case**: a perfect reader of the response | response payload matches intent |
+| `trust-layer` | this repo | independent read-back → tri-state → rollback / escalate |
+
+Faults injected at 30%: fake-200 (nothing stored), truncated on save, wrong-record (stored, but the returned id points nowhere), timeout after the write happened, transient 503 before it. The read path is 2% flaky so `unknown` has a real cost.
+
+**Accuracy**
+
+| strategy | silent failures | catch rate | orphaned writes | escalated | duplicates | partials left | end state correct |
+|---|---|---|---|---|---|---|---|
+| status-trust | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
+| retry-replay | 225 | 0.0% | 0 | 0 | **61** | 49 | 77.5% |
+| schema-validation | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
+| response-judge | 164 | 40.8% | 61 | 0 | 0 | 49 | 77.5% |
+| **trust-layer** | **0** | **100%** | 48 | 84 | **0** | 2 | **86.9%** |
+
+Silent failures by fault type (missed / injected):
+
+| strategy | fake-200 | truncated | wrong-record | timeout | 503 |
+|---|---|---|---|---|---|
+| every response-only baseline | 64/64 | 49/49 | 51/51 | 0/61 (retry-replay: 61/61) | 0/52 |
+| trust-layer | 0/64 | 0/49 | 0/51 | 0/61 | 0/52 |
+
+The structural point: **four of the five only ever look at the write's own response.** A fake-200 echoes the intent back perfectly, so status checks, schema validators and even a perfect judge are blind to it by construction. Retrying makes it worse: a timeout after a successful write becomes a duplicate ticket 61 times out of 61.
+
+**Time (the verifier tax)**
+
+| strategy | calls/action | ms/action (sim: write 120, read 60) |
+|---|---|---|
+| status-trust / schema / judge | 1.00 | 120 |
+| retry-replay | 1.11 | 134 |
+| trust-layer | 2.04 | 187 |
+
+One extra read per action, ~+50% latency on a clean run. That is the price; the tables above are what it buys.
+
+**Memory** — append-only notes (mem0-style `add()`, notes in a vector store) vs `memory.js`, over 25 services × 12 observations with 45 real ownership changes, top-3 retrieval:
+
+| metric | append-only | reconciling store |
+|---|---|---|
+| notes stored | 300 | 70 (25 active + 45 superseded) |
+| queries whose retrieved context contradicts itself | 13 (52%) | 0 |
+| ownership changes detected as revisions | 0 (`add()` can't tell a confirmation from a contradiction) | 45/45 |
+| confirmations mistaken for changes | n/a | 0 |
+
+**Honest caveats.** The 48 "orphaned writes" for the trust layer are all wrong-record cases: it correctly reports `false`, but the stray record lives under an id it was never given, so it can't reverse it — a content search as a second source would close that gap and is not implemented. The 84 escalations are 61 timeouts plus read-path failures: those go to a human instead of being guessed, which is the design. The LLM-judge baseline is modeled, not called; a real model can only do worse than a perfect reader of the same response, and adds latency and non-determinism. Append-only top-k ties are broken by insertion order; any tie-break yields contradictory context whenever two owners are among the k most similar notes.
+
 ### What the first live run caught
 
 Running against the real APIs for the first time, the layer flagged three things a bare "200 OK" would have hidden:
@@ -139,14 +202,15 @@ Requires Node ≥ 20 and the `gh` CLI, authenticated.
 ```bash
 npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
-npm test                 # 64 unit tests, all mocked
+npm test                 # 75 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
+npm run eval:competitive # the benchmark above (more trials: node eval/competitive/run.js 5000)
 
 node bin/cli.js                              # one live incident run → output/run-<ts>.json
 node bin/cli.js --undo output/run-<ts>.json  # reverse it, step by step, most recent first
 ```
 
-Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`.
+Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property).
 
 ## Layout
 
@@ -157,9 +221,11 @@ src/verifier.js            tri-state verify + canonicalization (pure)
 src/rollback.js            tiers, hold(), rollback(), agent-writable diff
 src/memory.js              fact store with supersededBy revision
 src/mock-trigger.js        canned Sentry payload
-src/integrations/          linear.js, github.js, slack.js — act / verify / undo
+src/integrations/          linear.js, github.js, slack.js, hubspot.js — act / verify / undo
 eval/                      fault-injection, rollback-fidelity, memory-scenarios,
                            tri-state-coverage, calibration, adversarial, latency-cost
+eval/competitive/          simulator (seeded faults + ground truth), strategies, memory-bench, run
+diagrams/                  architecture + flow: .mmd source, .excalidraw (editable), .svg, .png
 test/                      node:test, one file per module
 ```
 
