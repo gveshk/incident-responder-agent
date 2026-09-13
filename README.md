@@ -10,7 +10,7 @@ The agent itself is deliberately simple — one incident-response flow from a Se
 
 **Pitch video (2 min):** _link coming_ · **Demo video (2 min):** [`demos/incident-responder/output/final-demo.mp4`](demos/incident-responder/output/final-demo.mp4) — recorded against the live systems, nothing mocked: a real Sentry issue → DeepSeek diagnosis → Linear, Sentry, Slack, HubSpot, GitHub → the held PagerDuty page committed by a human → everything undone.
 
-![Incident Responder demo](demos/incident-responder/output/final-demo.gif)
+![Incident Responder demo](demos/incident-responder/output/final-demo.mp4)
 
 *Recorded with [aidemo](https://github.com/tandryukha/aidemo): the storyboard is code (`demos/incident-responder/generated/storyboard.json`), replayed deterministically in Chrome, narrated by a local Kokoro voice. `SUBMISSION.md` has the written brief.*
 
