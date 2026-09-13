@@ -16,7 +16,9 @@ export function canonicalize(text, app) {
   if (text == null) return "";
   let s = String(text);
   if (app === "slack") {
-    // Slack mangles markdown: strip emphasis markers before comparing.
+    // Slack auto-links bare URLs as <url> or <url|label> on save — unwrap
+    // to the URL. Then strip emphasis markers, which Slack also mangles.
+    s = s.replace(/<(https?:\/\/[^|>]+)(?:\|[^>]*)?>/g, "$1");
     s = s.replace(/[*_~`]/g, "");
   }
   if (app === "linear" || app === "github") {

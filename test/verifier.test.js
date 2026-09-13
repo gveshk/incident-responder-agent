@@ -6,6 +6,11 @@ test("canonicalize strips slack markdown emphasis markers", () => {
   assert.equal(canonicalize("*bold* and _italic_ and `code`", "slack"), "bold and italic and code");
 });
 
+test("canonicalize unwraps slack auto-linked URLs (seen live: Slack saves bare URLs as <url>)", () => {
+  assert.equal(canonicalize("ticket: <https://linear.app/x/BAR-5>", "slack"), "ticket: https://linear.app/x/BAR-5");
+  assert.equal(canonicalize("see <https://example.com|example>", "slack"), "see https://example.com");
+});
+
 test("canonicalize normalizes line endings for linear/github", () => {
   assert.equal(canonicalize("line1\r\nline2", "linear"), "line1 line2");
 });
