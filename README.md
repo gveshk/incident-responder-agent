@@ -216,7 +216,7 @@ Requires Node ≥ 20 and the `gh` CLI, authenticated.
 ```bash
 npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
-npm test                 # 109 unit tests, all mocked
+npm test                 # 110 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
 npm run eval:competitive # the 9-product benchmark; regenerates eval/competitive/RESULTS.md
 
@@ -228,7 +228,13 @@ node bin/cli.js --undo <run-id>              # reverse a run, most recent step f
 npm run serve                                # the service: webhook receiver + queue + REST, port 8787
 #   POST /webhooks/sentry   POST /runs {source}   GET /runs   GET /runs/:id
 #   POST /runs/:id/commit   POST /runs/:id/undo   GET /healthz
-# Point a Sentry internal integration's webhook at /webhooks/sentry (issue alerts) and set SENTRY_WEBHOOK_SECRET.
+# Expose it (no account needed): download cloudflared into tools/ and run
+npm run tunnel                               # prints https://<random>.trycloudflare.com
+node bin/sentry-webhook.js https://<random>.trycloudflare.com   # points the Sentry integration at it
+# The Sentry side is an internal integration named "Incident Responder" (webhook events: issue),
+# created once via the API; its client secret is SENTRY_WEBHOOK_SECRET. Quick-tunnel URLs change on
+# restart — re-run the sentry-webhook line each time. Only issue.created / issue.unresolved /
+# alert-rule "triggered" start a run; resolved / ignored / assigned are acknowledged and ignored.
 ```
 
 Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property). For `--sentry`: `SENTRY_AUTH_TOKEN` (user token with `event:read`, `event:write`, `project:read`) and `SENTRY_ORG`. For the model diagnosis: `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (default `deepseek/deepseek-v4-flash`; without a key the diagnosis falls back to the template and the log says so). For `--commit`: `PAGERDUTY_API_KEY` (REST API key), `PAGERDUTY_SERVICE_ID`, `PAGERDUTY_FROM_EMAIL` (a user on the account).

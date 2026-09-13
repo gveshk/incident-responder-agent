@@ -82,6 +82,10 @@ export function createApp({ outDir, integrations, diagnoser, webhookSecret = pro
     return { ok: a.length === b.length && timingSafeEqual(a, b) };
   }
 
+  // Only these mean "something is broken right now". resolved/ignored/assigned
+  // are lifecycle noise and must never start a run.
+  const ACTIONABLE = new Set(["created", "unresolved", "triggered", "regressed"]);
+
   /** Sentry sends several webhook shapes; the issue id is in one of these places. */
   function issueIdFrom(payload) {
     return payload?.data?.issue?.id ?? payload?.data?.event?.issue_id ?? payload?.data?.event?.issue ?? payload?.issue?.id ?? null;
@@ -104,6 +108,8 @@ export function createApp({ outDir, integrations, diagnoser, webhookSecret = pro
       if (req.method === "POST" && url.pathname === "/webhooks/sentry") {
         const sig = verifySignature(raw, req.headers["sentry-hook-signature"]);
         if (!sig.ok) return send(401, { error: "bad signature" });
+        const action = body?.action ?? "unknown";
+        if (!ACTIONABLE.has(action)) return send(200, { ignored: action });
         const issueId = issueIdFrom(body);
         if (!issueId) return send(400, { error: "no issue id in payload" });
         const live = await runs.findLiveRun(outDir, String(issueId));

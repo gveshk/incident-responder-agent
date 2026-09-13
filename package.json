@@ -15,7 +15,8 @@
     "test": "node --test",
     "eval": "node eval/run-all.js",
     "eval:competitive": "node eval/competitive/run.js",
-    "serve": "node bin/server.js"
+    "serve": "node bin/server.js",
+    "tunnel": "tools/cloudflared.exe tunnel --url http://localhost:8787 --no-autoupdate"
   },
   "dependencies": {
     "@slack/web-api": "^7.9.4"
