@@ -1,0 +1,47 @@
+import { WebClient } from "@slack/web-api";
+import { verify as verifyCore } from "../verifier.js";
+
+// `client` is injectable so tests can run without a real Slack token.
+function client(injected) {
+  if (injected) return injected;
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error("SLACK_BOT_TOKEN is not set");
+  return new WebClient(token);
+}
+
+export async function act(input, { client: injected } = {}) {
+  const channel = input.channel ?? process.env.SLACK_ALERT_CHANNEL;
+  if (!channel) throw new Error("SLACK_ALERT_CHANNEL is not set and no channel was passed");
+  const res = await client(injected).chat.postMessage({ channel, text: input.text });
+  return { id: res.ts, raw: { channel, ts: res.ts }, capturedBefore: null };
+}
+
+export async function verify(actResult, intent, { client: injected } = {}) {
+  let message;
+  try {
+    const res = await client(injected).conversations.history({ channel: actResult.raw.channel, latest: actResult.raw.ts, inclusive: true, limit: 1 });
+    message = res.messages?.find((m) => m.ts === actResult.raw.ts);
+  } catch {
+    return verifyCore({ exists: null, content: null });
+  }
+  return verifyCore({
+    exists: Boolean(message),
+    content: message ? { expected: intent.text, actual: message.text, app: "slack" } : null,
+  });
+}
+
+export async function undo(actResult, { client: injected } = {}) {
+  try {
+    await client(injected).chat.delete({ channel: actResult.raw.channel, ts: actResult.raw.ts });
+    return { ok: true, compensationType: "restored" };
+  } catch (err) {
+    // chat.delete can itself fail (permission, retention policy). This
+    // tier is compensable, never claimed as erasure — post a retraction.
+    try {
+      await client(injected).chat.postMessage({ channel: actResult.raw.channel, text: "Correction: the previous alert was sent in error and has been retracted.", thread_ts: actResult.raw.ts });
+      return { ok: true, compensationType: "compensated", note: "delete failed, posted retraction", error: err.message };
+    } catch (err2) {
+      return { ok: false, compensationType: "escalated", error: err2.message };
+    }
+  }
+}
