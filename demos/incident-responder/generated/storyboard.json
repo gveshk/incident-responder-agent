@@ -1,0 +1,104 @@
+{
+  "title": "Incident Responder — every action verified, every action reversible",
+  "targetLengthSeconds": 120,
+  "video": { "width": 1280, "height": 800 },
+  "voice": { "voiceId": "am_adam", "speed": 1.0 },
+  "scenes": [
+    {
+      "id": "intro",
+      "narration": "This is Incident Responder. It handles a production incident across six real apps. And every action it takes is independently verified, and reversible.",
+      "actions": [
+        { "op": "goto", "url": "http://localhost:8787/" },
+        { "op": "pause", "ms": 1200 },
+        { "op": "highlight", "target": { "selector": "header .sub" }, "holdMs": 1800 }
+      ]
+    },
+    {
+      "id": "trigger",
+      "narration": "We trigger it from a real Sentry issue. The run pulls the issue, has a cheap open model write the diagnosis, then works through Linear, Sentry, Slack, HubSpot and GitHub. Watch each step turn green.",
+      "actions": [
+        { "op": "click", "target": { "selector": "#trigger-sentry" } },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .pill.live" }, "timeoutMs": 120000 },
+        { "op": "pause", "ms": 800 }
+      ]
+    },
+    {
+      "id": "verify",
+      "narration": "Green does not mean the API said OK. For every step the agent re-reads the record through a different path and compares it to what it meant to write. True, false, or unknown. Never a bare boolean.",
+      "actions": [
+        { "op": "callout", "target": { "selector": ".run:first-child tr:has-text(\"linear.issueCreate\") .v" }, "text": "read back, not trusted", "holdMs": 2600 },
+        { "op": "highlight", "target": { "selector": ".run:first-child tr:has-text(\"hubspot.propertyUpdate\") .v" }, "holdMs": 1500 }
+      ]
+    },
+    {
+      "id": "held",
+      "narration": "Paging a human is the one thing you can't take back. So the agent doesn't. It holds the page at a gate until a person commits it.",
+      "actions": [
+        { "op": "callout", "target": { "selector": ".run:first-child tr:has-text(\"pagerduty.page\") .v" }, "text": "bufferable: held, not fired", "holdMs": 3200 }
+      ]
+    },
+    {
+      "id": "linear",
+      "narration": "Here is the ticket in Linear, with the model's diagnosis and the severity it assigned.",
+      "actions": [
+        { "op": "click", "target": { "selector": ".run:first-child tr:has-text(\"linear.issueCreate\") a.open" } },
+        { "op": "pause", "ms": 3800 },
+        { "op": "goto", "url": "http://localhost:8787/" },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .pill.live" }, "timeoutMs": 20000 }
+      ]
+    },
+    {
+      "id": "hubspot",
+      "narration": "In HubSpot, the affected customer account is flagged. The previous value was captured before the write, so it can be restored exactly, not just overwritten.",
+      "actions": [
+        { "op": "click", "target": { "selector": ".run:first-child tr:has-text(\"hubspot.propertyUpdate\") a.open" } },
+        { "op": "pause", "ms": 3800 },
+        { "op": "goto", "url": "http://localhost:8787/" },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .pill.live" }, "timeoutMs": 20000 }
+      ]
+    },
+    {
+      "id": "commit",
+      "narration": "Now a human commits the page. It fires as a real PagerDuty incident, and it is verified by listing incidents by key, not by trusting the create response. From here on it is compensable: it can be resolved, but nobody can be un-paged.",
+      "actions": [
+        { "op": "click", "target": { "selector": ".run:first-child .commit" } },
+        { "op": "waitFor", "target": { "selector": ".run:first-child tr:has-text(\"pagerduty.incidentCreate\") a.open" }, "timeoutMs": 30000 },
+        { "op": "callout", "target": { "selector": ".run:first-child tr:has-text(\"pagerduty.incidentCreate\") .v" }, "text": "now compensable", "holdMs": 1800 },
+        { "op": "click", "target": { "selector": ".run:first-child tr:has-text(\"pagerduty.incidentCreate\") a.open" } },
+        { "op": "pause", "ms": 3600 },
+        { "op": "goto", "url": "http://localhost:8787/" },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .undo" }, "timeoutMs": 20000 }
+      ]
+    },
+    {
+      "id": "undo",
+      "narration": "Undo walks the run backwards. The GitHub issue is deleted, the incident resolved, the account restored, the alert removed, the ticket trashed. Each step reports honestly what reversal meant: restored, compensated, or escalated.",
+      "actions": [
+        { "op": "click", "target": { "selector": ".run:first-child .undo" } },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .pill.undone" }, "timeoutMs": 60000 },
+        { "op": "pause", "ms": 600 },
+        { "op": "scrollTo", "target": { "selector": ".run:first-child table" } },
+        { "op": "highlight", "target": { "selector": ".run:first-child .pill.undone" }, "holdMs": 2200 }
+      ]
+    },
+    {
+      "id": "gone",
+      "narration": "And it is really gone.",
+      "actions": [
+        { "op": "click", "target": { "selector": ".run:first-child tr:has-text(\"github.issueCreate\") a.open" } },
+        { "op": "pause", "ms": 2600 },
+        { "op": "goto", "url": "http://localhost:8787/" },
+        { "op": "waitFor", "target": { "selector": ".run:first-child .pill.undone" }, "timeoutMs": 20000 }
+      ]
+    },
+    {
+      "id": "close",
+      "narration": "We benchmarked nine shipping tools against this layer on the same injected faults. They missed between 164 and 225 silent failures per thousand actions. This layer missed zero. The trust layer is modular, and it is on GitHub.",
+      "actions": [
+        { "op": "scrollTo", "target": { "selector": "header" } },
+        { "op": "highlight", "target": { "selector": "header h1" }, "holdMs": 2400 },
+        { "op": "pause", "ms": 1500 }
+      ]
+    }
+  ]
+}

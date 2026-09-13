@@ -2,3 +2,8 @@ output/
 node_modules/
 .env
 tools/
+demos/*/recordings/
+demos/*/audio/
+demos/*/logs/
+demos/*/generated/timeline.json
+demos/*/generated/captions.*

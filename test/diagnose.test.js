@@ -32,7 +32,7 @@ test("diagnose falls back to the templated diagnosis when no model is configured
 test("diagnose falls back, and says why, when the model call throws or returns junk", async () => {
   const d1 = await diagnose(trigger, { callModel: async () => { throw new Error("429 rate limited"); }, model: "m" });
   assert.equal(d1.fallback, true);
-  assert.match(d1.fallbackReason, /429/);
+  assert.match(d1.fallbackReason, /429.*2 attempts/);
   const d2 = await diagnose(trigger, { callModel: async () => "not json", model: "m" });
   assert.equal(d2.fallback, true);
   assert.match(d2.fallbackReason, /parse/i);
@@ -43,6 +43,15 @@ test("diagnose tolerates prose or fences around the JSON object", async () => {
   const d = await diagnose(trigger, { callModel, model: "m" });
   assert.equal(d.fallback, false);
   assert.equal(d.severity, "P3");
+});
+
+test("diagnose retries a model call once — the second attempt's JSON is used", async () => {
+  let n = 0;
+  const callModel = async () => { n += 1; return n === 1 ? "{\"" : JSON.stringify({ diagnosis: "ok", likelyCause: "c", severity: "P2", suggestedOwner: "o", confidence: 0.6 }); };
+  const d = await diagnose(trigger, { callModel, model: "m" });
+  assert.equal(n, 2);
+  assert.equal(d.fallback, false);
+  assert.equal(d.diagnosis, "ok");
 });
 
 test("diagnose clamps severity to P1-P4 and confidence to 0-1", async () => {

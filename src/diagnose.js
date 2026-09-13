@@ -51,12 +51,18 @@ async function openRouterCall(prompt, model) {
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       temperature: 0.2,
-      max_tokens: 400,
+      // Thinking models spend the token budget on hidden reasoning and return
+      // a truncated object (seen live: finish_reason=length at 400 tokens with
+      // 47 chars of content). Turn reasoning off and leave headroom.
+      reasoning: { enabled: false },
+      max_tokens: 900,
     }),
   });
   if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const json = await res.json();
-  return json.choices?.[0]?.message?.content ?? "";
+  const choice = json.choices?.[0];
+  if (choice?.finish_reason === "length") throw new Error(`truncated (finish_reason=length, ${json.usage?.completion_tokens} tokens)`);
+  return choice?.message?.content ?? "";
 }
 
 /**
@@ -74,22 +80,29 @@ export async function diagnose(trigger, { callModel, model = process.env.OPENROU
 
   if (!callModel) return fallback("no model configured");
 
-  let raw;
-  try {
-    raw = await callModel(prompt);
-  } catch (err) {
-    return fallback(`model call failed: ${err.message}`);
+  // A model call has no side effects, so a second attempt is safe — unlike
+  // the actions this layer verifies, which are never retried on "unknown".
+  let parsed, lastReason;
+  for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+    let raw;
+    try {
+      raw = await callModel(prompt);
+    } catch (err) {
+      lastReason = `model call failed: ${err.message}`;
+      continue;
+    }
+    try {
+      // Models sometimes wrap the object in fences or a sentence; take the outermost {...}.
+      const text = String(raw);
+      const start = text.indexOf("{"), end = text.lastIndexOf("}");
+      const candidate = JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);
+      if (typeof candidate.diagnosis !== "string" || !candidate.diagnosis) throw new Error("missing diagnosis");
+      parsed = candidate;
+    } catch (err) {
+      lastReason = `could not parse model output as JSON (${err.message}): ${String(raw).slice(0, 80)}`;
+    }
   }
-  let parsed;
-  try {
-    // Models sometimes wrap the object in fences or a sentence; take the outermost {...}.
-    const text = String(raw);
-    const start = text.indexOf("{"), end = text.lastIndexOf("}");
-    parsed = JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);
-  } catch {
-    return fallback(`could not parse model output as JSON: ${String(raw).slice(0, 80)}`);
-  }
-  if (typeof parsed.diagnosis !== "string" || !parsed.diagnosis) return fallback("model output missing diagnosis");
+  if (!parsed) return fallback(`${lastReason} (after 2 attempts)`);
 
   return {
     fallback: false, fallbackReason: null, model, promptHash,
