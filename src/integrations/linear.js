@@ -32,10 +32,11 @@ export async function verify(actResult, intent) {
   let issue;
   try {
     const data = await linearRequest(
-      `query Issue($id: String!) { issue(id: $id) { id title description state { name } } }`,
+      `query Issue($id: String!) { issue(id: $id) { id title description trashed state { name } } }`,
       { id: actResult.id },
     );
-    issue = data.issue;
+    // issueDelete is a soft delete: the id still resolves, with trashed=true.
+    issue = data.issue && !data.issue.trashed ? data.issue : null;
   } catch {
     return verifyCore({ exists: null, content: null });
   }
@@ -48,7 +49,9 @@ export async function verify(actResult, intent) {
 export async function undo(actResult) {
   try {
     const data = await linearRequest(`mutation IssueDelete($id: String!) { issueDelete(id: $id) { success } }`, { id: actResult.id });
-    return { ok: Boolean(data.issueDelete.success), compensationType: "restored" };
+    // Linear moves the issue to trash (invisible, auto-purged later) rather
+    // than hard-deleting — say so, don't imply the row is gone.
+    return { ok: Boolean(data.issueDelete.success), compensationType: "restored", note: "moved to Linear trash (soft delete)" };
   } catch (err) {
     return { ok: false, compensationType: "escalated", error: err.message };
   }

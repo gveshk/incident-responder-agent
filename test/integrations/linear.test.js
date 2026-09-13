@@ -51,6 +51,13 @@ test("verify() returns false when the issue does not exist on read-back", async 
   });
 });
 
+test("verify() returns false when the issue exists but is trashed (Linear soft-delete)", async () => {
+  await withMockedFetch([{ data: { issue: { id: "issue-1", title: "t", description: "d", trashed: true, state: { name: "Backlog" } } } }], async () => {
+    const result = await verify({ id: "issue-1" }, { description: "d" });
+    assert.equal(result.status, "false");
+  });
+});
+
 test("undo() deletes the issue", async () => {
   await withMockedFetch([{ data: { issueDelete: { success: true } } }], async () => {
     const result = await undo({ id: "issue-1" });
