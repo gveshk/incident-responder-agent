@@ -10,6 +10,24 @@ The agent itself is deliberately simple — one incident-response flow from a Se
 
 *Editable sources: [`diagrams/trust-layer-architecture.excalidraw`](diagrams/trust-layer-architecture.excalidraw) (open at excalidraw.com) and the `.mmd` mermaid next to it.*
 
+## Connected apps
+
+Seven real integrations, all exercised live (create → verify → undo) against real accounts, plus one model. Each mutating app implements the same three functions — `act` / `verify` / `undo` — in one small file under `src/integrations/`.
+
+| App | Role in the flow | Action | How it's verified (independent path) | Undo | Tier | Auth |
+|---|---|---|---|---|---|---|
+| **Sentry** | trigger + action | latest unresolved issue starts the run (webhook or `--sentry`); a note linking the ticket is posted on the issue | list the issue's notes, match id + text | delete the note | reversible | user auth token (`event:read/write`, `project:read`) |
+| **Linear** | action | creates the incident ticket | GraphQL read by id, `trashed` treated as gone, content match | `issueDelete` (soft delete → trash) | reversible | personal API key |
+| **Slack** | action | posts the alert to `#ops-alerts` | `conversations.history` at that `ts`, canonicalized text match (unwraps `<url>`) | `chat.delete`, or a threaded retraction if delete is refused | compensable | bot token, invited to the channel |
+| **HubSpot** | action | flags the affected company: `incident_status = investigating` | GET the property back | PATCH the captured pre-state value back | reversible | private app token (`crm.objects.companies.read/write`) |
+| **PagerDuty** | action, gated | incident on the service — **held**, fired only by `--commit` | list incidents by `incident_key` (not the create response) | resolve the incident; the page itself can't be un-sent | bufferable → compensable | REST API key + `From` user |
+| **GitHub** | action | opens an issue in the demo repo | `gh issue view` by number, content match; "could not resolve" = definitively gone | delete via GraphQL, or close if delete is refused | reversible | `gh` CLI keyring |
+| **OpenRouter → DeepSeek** | reasoning | `deepseek/deepseek-v4-flash` reads the issue + stack frames, writes diagnosis / cause / severity | not verified (prose, not an action) — logged with model id + prompt hash; audited fallback to a template | n/a | — | API key |
+
+Four of the six mutating apps also expose a **second source** (`findByContent`) for wrong-record recovery: Linear (issues by exact title since run start), GitHub (`gh issue list --search`), Slack (recent history, canonical text), Sentry (notes by text). HubSpot and PagerDuty address records by a known id/key, so the case doesn't arise.
+
+Adding an app means one file with those three functions and one line in `TIER_BY_ACTION_TYPE`; nothing in `agent.js` changes. HubSpot, Sentry and PagerDuty were each added after the first three without touching the orchestrator's structure.
+
 ## What it does
 
 A Sentry issue kicks off one incident-response cycle — the canned "error spike" payload by default (deterministic for rehearsal), or the latest real unresolved issue in your Sentry org with `--sentry`:
