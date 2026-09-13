@@ -24,10 +24,15 @@ async function sentryRequest(method, path, body) {
  * care where an incident came from. Owner comes from real data — the
  * issue's assignee if any, else the project's team.
  */
-export async function fetchTrigger({ org = process.env.SENTRY_ORG } = {}) {
+export async function fetchTrigger({ org = process.env.SENTRY_ORG, issueId = null } = {}) {
   if (!org) throw new Error("SENTRY_ORG is not set");
-  const issues = await sentryRequest("GET", `/organizations/${org}/issues/?query=is:unresolved&sort=date&limit=1`);
-  const issue = issues[0];
+  let issue;
+  if (issueId) {
+    issue = await sentryRequest("GET", `/issues/${issueId}/`);
+  } else {
+    const issues = await sentryRequest("GET", `/organizations/${org}/issues/?query=is:unresolved&sort=date&limit=1`);
+    issue = issues[0];
+  }
   if (!issue) throw new Error(`no unresolved issues in Sentry org "${org}"`);
 
   let owner = issue.assignedTo?.name;

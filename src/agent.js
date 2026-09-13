@@ -50,10 +50,14 @@ const DEFAULT_INTEGRATIONS = { linear: linearClient, slack: slackClient, github:
  * the diagnoser are injected so this can run against real APIs or fully
  * mocked ones (used by the eval harness and this file's own tests).
  */
-export async function runIncident({ trigger = buildMockSentryPayload(), integrations = DEFAULT_INTEGRATIONS, factStore = [], diagnoser = diagnoseDefault, event = null } = {}) {
+export async function runIncident({ trigger = buildMockSentryPayload(), integrations = DEFAULT_INTEGRATIONS, factStore = [], diagnoser = diagnoseDefault, event = null, onStep = null } = {}) {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const steps = [];
+  // Persist after every step so a crash mid-run leaves a log that --undo can
+  // still walk. The steps array is shared, so the partial log is always current.
+  const partial = { runId, startedAt, finishedAt: null, trigger, steps, factStore };
+  const push = async (step) => { steps.push(step); if (onStep) await onStep(partial); };
 
   async function runStep(actionType, input, intent) {
     const app = actionType.split(".")[0];
@@ -74,12 +78,12 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
       step.verifyResult = { ...verifyResult, checks: { ...verifyResult.checks, crossSourceConfirmed: false }, reason: `${verifyResult.reason}; ${recovery.reason}` };
     }
 
-    steps.push(step);
+    await push(step);
     return actResult;
   }
 
   const dx = await diagnoser(trigger, { event });
-  steps.push({ actionType: "llm.diagnose", ...dx });
+  await push({ actionType: "llm.diagnose", ...dx });
   const diagnosis = dx.likelyCause ? `${dx.diagnosis}\n\nLikely cause: ${dx.likelyCause}` : dx.diagnosis;
   const titlePrefix = `[${dx.severity}]`;
 
@@ -103,16 +107,17 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
     details: `${diagnosis}\n\nLinear: ${linearResult.raw.url ?? linearResult.id}`,
     incidentKey: runId,
   });
-  steps.push({ actionType: "pagerduty.page", tier: TIERS.BUFFERABLE, held: true, committed: false, intent: pageHold.intent });
+  await push({ actionType: "pagerduty.page", tier: TIERS.BUFFERABLE, held: true, committed: false, intent: pageHold.intent });
 
   const memoryResult = reconcile({ subject: trigger.service, predicate: "ownedBy", object: trigger.reportedOwner, source: trigger.sentryIssueId ? "sentry-issue" : "mock-trigger", confidence: 0.9 }, factStore);
-  steps.push({ actionType: "memory.reconcile", revised: memoryResult.revised, oldFact: memoryResult.oldFact, newFact: memoryResult.newFact });
+  await push({ actionType: "memory.reconcile", revised: memoryResult.revised, oldFact: memoryResult.oldFact, newFact: memoryResult.newFact });
 
   const githubBody = `${diagnosis}\n\nLinear: ${linearResult.raw.url ?? linearResult.id}`;
   const githubTitle = `${titlePrefix} Incident: ${trigger.service} ${trigger.errorType}`;
   await runStep("github.issueCreate", { title: githubTitle, body: githubBody }, { title: githubTitle, body: githubBody });
 
-  return { runId, startedAt, finishedAt: new Date().toISOString(), trigger, steps, factStore };
+  partial.finishedAt = new Date().toISOString();
+  return partial;
 }
 
 /**

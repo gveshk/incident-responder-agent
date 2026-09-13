@@ -60,6 +60,8 @@ The result is always `"true" | "false" | "unknown"` — never a bare boolean:
 
 Canonicalization absorbs the ways real APIs rewrite content (Slack wraps URLs in `<…>` and strips emphasis; Linear/GitHub normalize line endings). Anything beyond that is a real mismatch.
 
+When a read-back says "doesn't exist", a **second source** gets a vote before that verdict stands (`src/second-source.js`): an exact-content search in the same system, scoped to the run's time window. Exactly one match means the write happened under an id the API never returned — the reference is corrected, re-verified, and the step is marked `correctedVia: "content-search"` with the original id kept. No match: `false` stands. More than one: `unknown`, because guessing which is ours is exactly the kind of thing this layer refuses to do.
+
 ### 2. Four-tier rollback (`src/rollback.js`)
 
 "Reversible" is not one thing. Every action type is registered under a tier, and the tier decides what undo can honestly promise:
@@ -158,7 +160,7 @@ Faults at 30%: fake-200 (nothing stored), truncated on save, wrong-record (store
 | [Guardrails AI](https://github.com/guardrails-ai/guardrails) | schema validation | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
 | [Pydantic AI](https://ai.pydantic.dev/tools/) | schema validation | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
 | [LLM-as-judge (Langfuse / Arize)](https://langfuse.com/docs/evaluation/evaluation-methods/llm-as-a-judge) | response judge, best case | 164 | 40.8% | 61 | 0 | 77.5% | 1.00 |
-| **trust layer (this repo)** | independent read-back | **0** | **100%** | 48 | **0** | **86.9%** | 2.04 |
+| **trust layer (this repo)** | independent read-back + second source | **0** | **100%** | **0** | **0** | **91.7%** | 2.15 |
 
 - *silent failures*: reality was wrong and the product told the agent "done". *orphaned writes*: the product said "failed" but a record exists the agent doesn't know about. *end state correct*: what the agent was told matches reality and nothing half-done remains.
 
@@ -174,7 +176,7 @@ Silent failures by fault type (missed / injected):
 
 The structural point: **every one of the nine only ever reads the write's own response.** A fake-200 echoes the intent back perfectly, so status checks, schema validators and even a perfect judge are blind to it by construction. Retry frameworks make it worse: a timeout after a successful write becomes a duplicate record 61 times out of 61, because the framework cannot tell a timeout-after-write from a 503-before-write. This layer can, because it reads back.
 
-**Time (the verifier tax)** — one extra read per action: 2.00 calls and 180ms vs 1.00 and 120ms on a clean run (+50%). That is the price; the tables above are what it buys.
+**Time (the verifier tax)** — one extra read per action: 2.00 calls and 180ms vs 1.00 and 120ms on a clean run (+50%); the second-source search only runs when an id points nowhere (2.15 calls/action under 30% faults). That is the price; the tables above are what it buys.
 
 **Memory** — 25 services, 300 observations, 45 real ownership changes, top-3 retrieval:
 
@@ -186,7 +188,7 @@ The structural point: **every one of the nine only ever reads the write's own re
 
 mem0 is the honest comparison here: it does resolve conflicts, but with an LLM call per `add()` (non-deterministic, and [known to delete memories you still need](https://dev.to/mukesh_13/mem0-auto-resolves-memory-conflicts-for-you-until-it-silently-deletes-one-you-still-need-4f4m)) and no retained history. `memory.js` gets the same current-owner accuracy deterministically, with the old fact kept and linked.
 
-**Caveats, in writing.** The trust layer's 48 orphaned writes are all wrong-record cases: it correctly reports `false`, but the stray record lives under an id it was never given, so it can't reverse it — a content search as a second source would close that and isn't implemented. Its 84 escalations are 61 timeouts plus read-path failures, handed to a human instead of guessed. Retry rows are pinned to 3 attempts (LangGraph's default; Temporal's is unlimited). LLM-judge and mem0 are modeled at their best case, not called.
+**Caveats, in writing.** The trust layer's 84 escalations are 61 timeouts plus read-path failures, handed to a human instead of guessed. Retry rows are pinned to 3 attempts (LangGraph's default; Temporal's is unlimited). LLM-judge and mem0 are modeled at their best case, not called.
 
 ### What the first live run caught
 
@@ -204,8 +206,8 @@ What is still demo-grade, stated plainly:
 
 - **The diagnosis is the one unverified step.** A model (`deepseek/deepseek-v4-flash` via OpenRouter, ~$0.05/M tokens) reads the issue and the latest event's stack frames and writes diagnosis, likely cause and severity as JSON. The trust layer verifies actions, not prose, so instead the run log records the model id, a hash of the exact prompt, and — if the model is unconfigured, errors, or returns junk — that it fell back to the template and why. Never a silent fallback. The model's severity sets the `[P1..P4]` prefix on every ticket; the memory step still uses the alerting system's owner, not the model's guess.
 - **PagerDuty is held by default, and the commit is a human's click.** `node bin/cli.js --commit <run-log>` is that click: it fires the page through `hold().commit()`, verifies it by listing incidents by `incident_key` (a different path than the create response), and refuses a second commit. Once committed the page is compensable: `--undo` resolves the incident but cannot un-wake whoever was paged — and the log says exactly that.
-- **Wrong-record blind spot.** If an API stores a write under an id it never returns, the layer reports `false` but cannot reverse what it cannot address (see benchmark caveats).
-- **Single process, `.env` secrets, no rate-limit handling.** It is a CLI, not a service.
+- **Wrong-record writes are recovered, not just reported.** An id that points nowhere triggers an exact-content search; one match is adopted and re-verified. In the benchmark this took orphaned writes from 48 to 0 and end-state correctness from 86.9% to 91.7%; the rest is escalations.
+- **It runs as a service.** `npm run serve` starts an always-on process: Sentry's issue-alert webhook (HMAC-verified when `SENTRY_WEBHOOK_SECRET` is set) queues a run; one worker executes runs in order so a burst of alerts for the same issue yields one run; pending jobs are persisted under `output/queue/` and picked up after a restart; the run log is written after every step, so a crash mid-run leaves a log `--undo` can walk. A crashed run is reported under `/healthz` and deliberately **not resumed** — re-running steps is how duplicates happen. Commit and undo are `POST /runs/:id/commit` and `POST /runs/:id/undo`. Still `.env` for secrets and a local folder for logs; a vault and a database are deployment choices, not agent logic.
 
 ## Running it
 
@@ -214,14 +216,19 @@ Requires Node ≥ 20 and the `gh` CLI, authenticated.
 ```bash
 npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
-npm test                 # 96 unit tests, all mocked
+npm test                 # 109 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
 npm run eval:competitive # the 9-product benchmark; regenerates eval/competitive/RESULTS.md
 
 node bin/cli.js                              # one live run from the mock trigger → output/run-<ts>.json
 node bin/cli.js --sentry                     # same, triggered by your latest real unresolved Sentry issue
-node bin/cli.js --commit output/run-<ts>.json  # fire the held PagerDuty page (the human approval step)
-node bin/cli.js --undo output/run-<ts>.json  # reverse it, step by step, most recent first
+node bin/cli.js --commit <run-id>            # fire the held PagerDuty page (the human approval step)
+node bin/cli.js --undo <run-id>              # reverse a run, most recent step first
+
+npm run serve                                # the service: webhook receiver + queue + REST, port 8787
+#   POST /webhooks/sentry   POST /runs {source}   GET /runs   GET /runs/:id
+#   POST /runs/:id/commit   POST /runs/:id/undo   GET /healthz
+# Point a Sentry internal integration's webhook at /webhooks/sentry (issue alerts) and set SENTRY_WEBHOOK_SECRET.
 ```
 
 Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property). For `--sentry`: `SENTRY_AUTH_TOKEN` (user token with `event:read`, `event:write`, `project:read`) and `SENTRY_ORG`. For the model diagnosis: `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (default `deepseek/deepseek-v4-flash`; without a key the diagnosis falls back to the template and the log says so). For `--commit`: `PAGERDUTY_API_KEY` (REST API key), `PAGERDUTY_SERVICE_ID`, `PAGERDUTY_FROM_EMAIL` (a user on the account).
@@ -236,6 +243,10 @@ src/rollback.js            tiers, hold(), rollback(), agent-writable diff
 src/memory.js              fact store with supersededBy revision
 src/mock-trigger.js        canned Sentry payload
 src/diagnose.js            model diagnosis via OpenRouter, injectable, audited fallback
+src/second-source.js       wrong-record recovery: exact-content search when an id points nowhere
+src/runs.js                run lifecycle shared by CLI and server: start (crash-safe log), commit, undo, dedup
+src/server.js              node:http service: Sentry webhook, persisted single-worker queue, REST
+bin/server.js              entrypoint for npm run serve
 src/integrations/          linear.js, github.js, slack.js, hubspot.js, sentry.js, pagerduty.js — act / verify / undo
                            (sentry.js also exports fetchTrigger + fetchLatestEvent for the --sentry path)
 eval/                      fault-injection, rollback-fidelity, memory-scenarios,
