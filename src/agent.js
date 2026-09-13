@@ -9,6 +9,7 @@ import { classifyTier, rollback, hold, TIERS } from "./rollback.js";
 import { reconcile } from "./memory.js";
 import { buildMockSentryPayload } from "./mock-trigger.js";
 import { diagnose as diagnoseDefault } from "./diagnose.js";
+import { recoverViaSecondSource } from "./second-source.js";
 
 const DEFAULT_INTEGRATIONS = { linear: linearClient, slack: slackClient, github: githubClient, hubspot: hubspotClient, sentry: sentryClient, pagerduty: pagerdutyClient };
 
@@ -56,9 +57,24 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
 
   async function runStep(actionType, input, intent) {
     const app = actionType.split(".")[0];
-    const actResult = await integrations[app].act(input);
-    const verifyResult = await integrations[app].verify(actResult, intent);
-    steps.push({ actionType, tier: classifyTier(actionType), input, actResult, verifyResult });
+    let actResult = await integrations[app].act(input);
+    let verifyResult = await integrations[app].verify(actResult, intent);
+    const step = { actionType, tier: classifyTier(actionType), input, actResult, verifyResult };
+
+    // Wrong-record recovery: "doesn't exist by that id" gets a second opinion.
+    const recovery = await recoverViaSecondSource({ integration: integrations[app], actResult, intent, verifyResult, since: startedAt });
+    if (recovery?.outcome === "corrected") {
+      actResult = recovery.corrected;
+      verifyResult = { ...recovery.reverified, checks: { ...recovery.reverified.checks, crossSourceConfirmed: true } };
+      Object.assign(step, { actResult, verifyResult, correctedVia: "content-search", originalActResult: step.actResult, recoveryReason: recovery.reason });
+    } else if (recovery?.outcome === "unknown") {
+      verifyResult = { ...verifyResult, status: "unknown", confidence: 0.3, reason: `${verifyResult.reason}; ${recovery.reason}` };
+      step.verifyResult = verifyResult;
+    } else if (recovery?.outcome === "none") {
+      step.verifyResult = { ...verifyResult, checks: { ...verifyResult.checks, crossSourceConfirmed: false }, reason: `${verifyResult.reason}; ${recovery.reason}` };
+    }
+
+    steps.push(step);
     return actResult;
   }
 
@@ -67,7 +83,8 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
   const diagnosis = dx.likelyCause ? `${dx.diagnosis}\n\nLikely cause: ${dx.likelyCause}` : dx.diagnosis;
   const titlePrefix = `[${dx.severity}]`;
 
-  const linearResult = await runStep("linear.issueCreate", { title: `${titlePrefix} ${trigger.service}: ${trigger.errorType}`, description: diagnosis }, { description: diagnosis });
+  const linearTitle = `${titlePrefix} ${trigger.service}: ${trigger.errorType}`;
+  const linearResult = await runStep("linear.issueCreate", { title: linearTitle, description: diagnosis }, { title: linearTitle, description: diagnosis });
 
   if (trigger.sentryIssueId) {
     const noteText = `Incident Responder: tracking in Linear ${linearResult.raw.url ?? linearResult.id}`;
@@ -92,7 +109,8 @@ export async function runIncident({ trigger = buildMockSentryPayload(), integrat
   steps.push({ actionType: "memory.reconcile", revised: memoryResult.revised, oldFact: memoryResult.oldFact, newFact: memoryResult.newFact });
 
   const githubBody = `${diagnosis}\n\nLinear: ${linearResult.raw.url ?? linearResult.id}`;
-  await runStep("github.issueCreate", { title: `${titlePrefix} Incident: ${trigger.service} ${trigger.errorType}`, body: githubBody }, { body: githubBody });
+  const githubTitle = `${titlePrefix} Incident: ${trigger.service} ${trigger.errorType}`;
+  await runStep("github.issueCreate", { title: githubTitle, body: githubBody }, { title: githubTitle, body: githubBody });
 
   return { runId, startedAt, finishedAt: new Date().toISOString(), trigger, steps, factStore };
 }

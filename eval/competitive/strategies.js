@@ -80,14 +80,26 @@ async function trustLayer(app, intent) {
   } catch {
     return { claim: "unknown", reason: "read-back failed" };
   }
-  const verdict = verifyCore({
+  let id = res.id;
+  let verdict = verifyCore({
     exists: Boolean(record),
     content: record ? { expected: intent.content, actual: record.content, app: "sim" } : null,
   });
+  if (!record) {
+    // Second source (src/second-source.js semantics): the id points nowhere —
+    // is there exactly one record with this content? Adopt it; 0 → false; >1 → unknown.
+    const matches = await app.search(intent.content);
+    if (matches.length === 1) {
+      id = matches[0].id;
+      verdict = verifyCore({ exists: true, content: { expected: intent.content, actual: matches[0].content, app: "sim" }, crossSourceConfirmed: true });
+    } else if (matches.length > 1) {
+      return { claim: "unknown", reason: `${matches.length} records match — cannot tell which is ours` };
+    }
+  }
   if (verdict.status === "false" && record) {
     await rollback({ actionType: "linear.issueCreate", undoFn: () => app.delete(res.id) });
   }
-  return { claim: verdict.status, id: res.id, reason: verdict.reason, confidence: verdict.confidence };
+  return { claim: verdict.status, id, reason: verdict.reason, confidence: verdict.confidence };
 }
 
 const isTransient = (err) => err.transient === true; // timeout or 5xx
@@ -176,7 +188,7 @@ export const STRATEGIES = [
     product: "this repo (src/verifier.js + src/rollback.js)",
     url: "https://github.com/gveshk/incident-responder-agent",
     pattern: "independent read-back",
-    behavior: "Write once. Re-read via a different path, tri-state verdict, rollback on false, escalate on unknown. Retry only a definitive 5xx (nothing was written); never a timeout.",
+    behavior: "Write once. Re-read via a different path, tri-state verdict, rollback on false, escalate on unknown. Retry only a definitive 5xx (nothing was written); never a timeout. On a missing id, a second source (exact-content search) recovers a wrong-record write or escalates if ambiguous.",
     run: trustLayer,
   },
 ];

@@ -40,6 +40,13 @@ export async function verify(actResult, intent, { exec } = {}) {
   });
 }
 
+/** Second source: issues in the repo with this exact title created since `since`. */
+export async function findByContent(intent, { since }, { exec } = {}) {
+  const repo = intent.repo ?? process.env.GITHUB_DEMO_REPO;
+  const stdout = await gh(["issue", "list", "--repo", repo, "--state", "all", "--search", `in:title "${intent.title}" created:>=${new Date(since).toISOString()}`, "--json", "number,title,url,body"], exec);
+  return JSON.parse(stdout).filter((i) => i.title === intent.title).map((i) => ({ id: i.number, raw: { url: i.url, repo } }));
+}
+
 export async function undo(actResult, { exec } = {}) {
   try {
     // Primary: real deletion (reversible tier means "as if it never

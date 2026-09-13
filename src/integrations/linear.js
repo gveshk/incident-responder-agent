@@ -46,6 +46,16 @@ export async function verify(actResult, intent) {
   });
 }
 
+/** Second source: issues with this exact title created since `since`. Used only after a failed existence check. */
+export async function findByContent(intent, { since }) {
+  const teamId = process.env.LINEAR_TEAM_ID;
+  const data = await linearRequest(
+    `query Find($filter: IssueFilter) { issues(filter: $filter, first: 10) { nodes { id identifier title description url createdAt } } }`,
+    { filter: { title: { eq: intent.title }, createdAt: { gte: since }, ...(teamId ? { team: { id: { eq: teamId } } } : {}) } },
+  );
+  return data.issues.nodes.map((issue) => ({ id: issue.id, raw: issue }));
+}
+
 export async function undo(actResult) {
   try {
     const data = await linearRequest(`mutation IssueDelete($id: String!) { issueDelete(id: $id) { success } }`, { id: actResult.id });

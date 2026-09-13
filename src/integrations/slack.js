@@ -1,5 +1,5 @@
 import { WebClient } from "@slack/web-api";
-import { verify as verifyCore } from "../verifier.js";
+import { verify as verifyCore, canonicalize } from "../verifier.js";
 
 // `client` is injectable so tests can run without a real Slack token.
 function client(injected) {
@@ -28,6 +28,14 @@ export async function verify(actResult, intent, { client: injected } = {}) {
     exists: Boolean(message),
     content: message ? { expected: intent.text, actual: message.text, app: "slack" } : null,
   });
+}
+
+/** Second source: messages in the channel since `since` whose canonical text equals the intent. */
+export async function findByContent(intent, { since }, { client: injected } = {}) {
+  const channel = intent.channel ?? process.env.SLACK_ALERT_CHANNEL;
+  const res = await client(injected).conversations.history({ channel, oldest: String(new Date(since).getTime() / 1000), limit: 50 });
+  const want = canonicalize(intent.text, "slack");
+  return (res.messages ?? []).filter((m) => canonicalize(m.text, "slack") === want).map((m) => ({ id: m.ts, raw: { channel, ts: m.ts } }));
 }
 
 export async function undo(actResult, { client: injected } = {}) {

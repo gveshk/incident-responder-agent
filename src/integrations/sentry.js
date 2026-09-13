@@ -87,6 +87,12 @@ export async function verify(actResult, intent) {
   });
 }
 
+/** Second source: notes on the issue with this exact text. */
+export async function findByContent(intent) {
+  const notes = await sentryRequest("GET", `/issues/${intent.issueId}/comments/`);
+  return notes.filter((n) => n.data?.text === intent.text).map((n) => ({ id: n.id, raw: { issueId: intent.issueId, text: n.data.text } }));
+}
+
 export async function undo(actResult) {
   try {
     await sentryRequest("DELETE", `/issues/${actResult.raw.issueId}/comments/${actResult.id}/`);

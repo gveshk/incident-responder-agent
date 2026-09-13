@@ -70,6 +70,12 @@ export function createSimulatedApp({ readFaultRate = 0, latencyMs = { write: 120
       return store.get(id) ?? null;
     },
 
+    /** Second source: records with exactly this content. A different question than "does id X exist". */
+    async search(content) {
+      spend("read");
+      return [...store.values()].filter((r) => r.content === content);
+    },
+
     async delete(id) {
       spend("delete");
       store.delete(id);

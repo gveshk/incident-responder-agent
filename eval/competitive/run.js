@@ -43,7 +43,7 @@ async function main() {
       memory.rows.map((r) => [link(r), r.stored, bold(r, `${r.contradictoryContexts} (${pct(r.contradictoryContexts / memory.services)})`), r.currentCorrect === null ? "n/a — model must pick" : `${r.currentCorrect}/${memory.services}`, bold(r, `${r.revisionsDetected}/${memory.ownershipChanges}`), r.falseRevisions === null ? "n/a" : r.falseRevisions, bold(r, r.historyRetained), r.llmCallsPerAdd, r.deterministic ? "yes" : "no"])), ``,
     ...memory.rows.filter((r) => r.note).map((r) => `- ${r.product}: ${r.note}`), ``,
     `## Caveats`, ``,
-    `- Trust-layer "orphaned writes" are all wrong-record cases: it correctly reports \`false\`, but the stray record lives under an id it was never given, so it cannot reverse it. A content search as a second source would close this; not implemented.`,
+    `- Wrong-record writes are recovered by a second source: when the returned id points nowhere, an exact-content search finds the stray record; exactly one match is adopted and re-verified, more than one is escalated as unknown. Any remaining trust-layer orphans are cases where the read path itself failed.`,
     `- Trust-layer escalations are timeouts plus read-path failures. Those go to a human instead of being guessed. That is the design, and it is a real cost.`,
     `- Retry rows are pinned to 3 attempts (LangGraph's default; Temporal's default is unlimited). More attempts only add duplicates.`,
     `- LLM-judge and mem0 are modeled at their best case (perfect decisions, zero latency). Real runs can only be worse on the same input.`,

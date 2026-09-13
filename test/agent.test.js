@@ -87,6 +87,41 @@ test("the diagnosis step is logged with model, prompt hash and fallback flag, an
   assert.match(runLog.steps[1].input.description, /Likely cause: null cart/);
 });
 
+test("wrong-record recovery: a ghost id is corrected via the integration's second source and marked on the step", async () => {
+  // Linear stores the ticket as real-1 but returns ghost-1; the read-back by ghost-1 finds nothing.
+  const linear = {
+    act: async (input) => ({ id: "ghost-1", raw: { title: input.title, url: "https://example.test/ghost" }, capturedBefore: null }),
+    verify: async (actResult, intent) => verifyCore({ exists: actResult.id === "real-1", content: actResult.id === "real-1" ? { expected: intent.description, actual: intent.description, app: "linear" } : null }),
+    findByContent: async (intent) => [{ id: "real-1", raw: { url: "https://example.test/real", title: intent.title } }],
+    undo: async () => ({ ok: true }),
+  };
+  const integrations = { linear, slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry"), pagerduty: fakeIntegration("pagerduty") };
+  const runLog = await runIncident({ integrations, factStore: createFactStore([]), diagnoser: fakeDiagnoser });
+  const step = runLog.steps.find((s) => s.actionType === "linear.issueCreate");
+  assert.equal(step.correctedVia, "content-search");
+  assert.equal(step.actResult.id, "real-1");
+  assert.equal(step.originalActResult.id, "ghost-1");
+  assert.equal(step.verifyResult.status, "true");
+  assert.equal(step.verifyResult.checks.crossSourceConfirmed, true);
+  // downstream steps use the corrected reference
+  const slack = runLog.steps.find((s) => s.actionType === "slack.postMessage");
+  assert.match(slack.input.text, /example\.test\/real/);
+});
+
+test("wrong-record recovery: no match keeps false; two matches becomes unknown", async () => {
+  const mk = (matches) => ({
+    act: async (input) => ({ id: "ghost-1", raw: { title: input.title }, capturedBefore: null }),
+    verify: async () => verifyCore({ exists: false, content: null }),
+    findByContent: async () => matches,
+    undo: async () => ({ ok: true }),
+  });
+  const base = { slack: fakeIntegration("slack"), github: fakeIntegration("github"), hubspot: fakeIntegration("hubspot"), sentry: fakeIntegration("sentry"), pagerduty: fakeIntegration("pagerduty") };
+  const none = await runIncident({ integrations: { ...base, linear: mk([]) }, factStore: createFactStore([]), diagnoser: fakeDiagnoser });
+  assert.equal(none.steps.find((s) => s.actionType === "linear.issueCreate").verifyResult.status, "false");
+  const two = await runIncident({ integrations: { ...base, linear: mk([{ id: "a", raw: {} }, { id: "b", raw: {} }]) }, factStore: createFactStore([]), diagnoser: fakeDiagnoser });
+  assert.equal(two.steps.find((s) => s.actionType === "linear.issueCreate").verifyResult.status, "unknown");
+});
+
 test("commitPage fires the held page through hold().commit(), verifies it, and marks the step committed", async () => {
   let fired = 0;
   const pagerduty = { ...fakeIntegration("pagerduty"), act: async (input) => { fired += 1; return { id: "Q1", raw: { incidentKey: input.incidentKey, title: input.title }, capturedBefore: null }; } };
