@@ -46,6 +46,14 @@ test("POST /runs queues a mock run; the worker completes it and GET /runs lists 
   await s.close();
 });
 
+test("GET / serves the UI", async () => {
+  const s = await boot();
+  const res = await fetch(`http://127.0.0.1:${s.app.server.address().port}/`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Incident Responder/);
+  await s.close();
+});
+
 test("commit then undo through the API; a second commit is 409, a second undo is 409", async () => {
   const s = await boot();
   await s.call("POST", "/runs", { source: "mock" });

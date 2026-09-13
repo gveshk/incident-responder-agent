@@ -82,7 +82,10 @@ export async function diagnose(trigger, { callModel, model = process.env.OPENROU
   }
   let parsed;
   try {
-    parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    // Models sometimes wrap the object in fences or a sentence; take the outermost {...}.
+    const text = String(raw);
+    const start = text.indexOf("{"), end = text.lastIndexOf("}");
+    parsed = JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);
   } catch {
     return fallback(`could not parse model output as JSON: ${String(raw).slice(0, 80)}`);
   }

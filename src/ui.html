@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Incident Responder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e8ee; --dim:#8b93a7; --ok:#3ecf8e; --bad:#ff5d5d; --unk:#f2b84b; --held:#8aa4ff; --accent:#6c8cff; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:18px 28px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; letter-spacing:.2px }
+  header .sub { color:var(--dim); font-size:13px }
+  header .spacer { flex:1 }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 14px; font:inherit; cursor:pointer }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
+  button.danger { border-color:var(--bad); color:var(--bad) }
+  button:disabled { opacity:.45; cursor:default }
+  main { padding:22px 28px; display:grid; gap:18px; max-width:1180px }
+  .run { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px }
+  .run-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+  .run-head .id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--dim) }
+  .pill { font-size:12px; padding:2px 9px; border-radius:999px; border:1px solid var(--line); color:var(--dim) }
+  .pill.live { color:var(--ok); border-color:var(--ok) }
+  .pill.undone { color:var(--dim) }
+  .pill.running { color:var(--unk); border-color:var(--unk) }
+  table { width:100%; border-collapse:collapse; margin-top:12px }
+  td { padding:8px 6px; border-top:1px solid var(--line); vertical-align:top }
+  td.type { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; white-space:nowrap }
+  td.tier { color:var(--dim); font-size:13px; white-space:nowrap }
+  .v { font-weight:600 } .v.true { color:var(--ok) } .v.false { color:var(--bad) } .v.unknown { color:var(--unk) } .v.held { color:var(--held) } .v.info { color:var(--dim); font-weight:400 }
+  a { color:var(--accent); text-decoration:none } a:hover { text-decoration:underline }
+  .dx { color:var(--dim); font-size:13px }
+  .empty { color:var(--dim); padding:40px; text-align:center; border:1px dashed var(--line); border-radius:12px }
+  .toast { position:fixed; right:20px; bottom:20px; background:var(--panel); border:1px solid var(--line); padding:10px 14px; border-radius:10px; display:none }
+</style>
+</head>
+<body>
+<header>
+  <h1>Incident Responder</h1>
+  <span class="sub">every action verified · every action reversible</span>
+  <span class="spacer"></span>
+  <span id="health" class="pill">…</span>
+  <button id="trigger-mock">Trigger (mock)</button>
+  <button id="trigger-sentry" class="primary">Trigger from Sentry</button>
+</header>
+<main id="runs"><div class="empty">No runs yet.</div></main>
+<div id="toast" class="toast"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const toast = (m) => { const t = $("#toast"); t.textContent = m; t.style.display = "block"; setTimeout(() => (t.style.display = "none"), 2600); };
+const api = async (method, path, body) => { const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); return r.json(); };
+
+function verdict(step) {
+  if (step.actionType === "llm.diagnose") return `<span class="v info">${step.fallback ? "fallback: " + step.fallbackReason : step.model}</span>`;
+  if (step.actionType === "memory.reconcile") return `<span class="v info">${step.revised ? `revised: was "${step.oldFact.object}", now "${step.newFact.object}"` : "confirmed"}</span>`;
+  if (step.held) return `<span class="v held">HELD — not fired</span>`;
+  const v = step.verifyResult; if (!v) return "";
+  return `<span class="v ${v.status}">verify=${v.status}</span> <span class="dim">(${(v.confidence ?? 0).toFixed(2)})</span>${step.correctedVia ? ` <span class="dx">id corrected via ${step.correctedVia}</span>` : ""}${step.committed ? ` <span class="dx">committed</span>` : ""}`;
+}
+function link(step) {
+  const u = step.actResult?.raw?.url; if (u) return `<a href="${u}" target="_blank" rel="noopener">open ↗</a>`;
+  if (step.actResult?.raw?.channel) return `<span class="dx">#ops-alerts ts ${step.actResult.raw.ts}</span>`;
+  return "";
+}
+function detail(step) {
+  if (step.actionType === "llm.diagnose") return `<div class="dx">${step.severity} — ${step.diagnosis}${step.likelyCause ? " · " + step.likelyCause : ""}</div>`;
+  if (step.held) return `<div class="dx">${step.intent.reason}</div>`;
+  if (step.actionType === "sentry.noteCreate") return `<div class="dx">${step.input.text}</div>`;
+  if (step.input?.title) return `<div class="dx">${step.input.title}</div>`;
+  if (step.input?.text) return `<div class="dx">${step.input.text}</div>`;
+  if (step.input?.property) return `<div class="dx">${step.input.property} = ${step.input.value}${step.actResult?.capturedBefore ? ` (was ${JSON.stringify(step.actResult.capturedBefore[step.input.property])})` : ""}</div>`;
+  return "";
+}
+function renderRun(r) {
+  const page = r.steps.find((s) => s.actionType === "pagerduty.page");
+  const status = r.undoneAt ? "undone" : r.finishedAt ? "live" : "running";
+  return `<section class="run" data-run="${r.runId}">
+    <div class="run-head">
+      <strong>${r.trigger?.sentryShortId ? `Sentry ${r.trigger.sentryShortId}` : "Mock trigger"}</strong>
+      <span class="dx">${r.trigger?.service} — ${r.trigger?.errorType}</span>
+      <span class="pill ${status}">${status}</span>
+      <span class="id">${r.runId}</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="commit" ${!r.finishedAt || r.undoneAt || page?.committed ? "disabled" : ""}>Commit PagerDuty page</button>
+      <button class="undo danger" ${!r.finishedAt || r.undoneAt ? "disabled" : ""}>Undo run</button>
+    </div>
+    <table>${r.steps.map((s) => `<tr><td class="type">${s.committedActionType ?? s.actionType}</td><td class="tier">${s.tier ?? ""}</td><td>${verdict(s)}${detail(s)}</td><td>${link(s)}</td></tr>`).join("")}</table>
+    ${r.undoResults ? `<div class="dx" style="margin-top:10px">undo: ${r.undoResults.map((u) => `${u.actionType.split(".")[0]} → ${u.outcome}`).join(" · ")}</div>` : ""}
+  </section>`;
+}
+async function refresh() {
+  const [list, health] = await Promise.all([api("GET", "/runs"), api("GET", "/healthz")]);
+  $("#health").textContent = health.running ? "running…" : health.queued ? `${health.queued} queued` : "idle";
+  $("#health").className = "pill " + (health.running || health.queued ? "running" : "");
+  const full = await Promise.all(list.slice(0, 6).map((r) => api("GET", `/runs/${r.runId}`)));
+  $("#runs").innerHTML = full.length ? full.map(renderRun).join("") : `<div class="empty">No runs yet. Trigger one, or resolve → unresolve an issue in Sentry.</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.id === "trigger-mock") { await api("POST", "/runs", { source: "mock" }); toast("Run queued"); }
+  if (b.id === "trigger-sentry") { await api("POST", "/runs", { source: "sentry" }); toast("Run queued from Sentry"); }
+  const runId = b.closest("[data-run]")?.dataset.run;
+  if (b.classList.contains("commit")) { const r = await api("POST", `/runs/${runId}/commit`); toast(r.error ?? `Paged: incident #${r.incident.number} — verify=${r.verify}`); }
+  if (b.classList.contains("undo")) { const r = await api("POST", `/runs/${runId}/undo`); toast(r.error ?? `Undone: ${r.results.map((x) => x.outcome).join(", ")}`); }
+  refresh();
+});
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

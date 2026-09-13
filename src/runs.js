@@ -16,6 +16,16 @@ export const DEMO_FACTS = [{ subject: "checkout-api", predicate: "ownedBy", obje
 
 const runPath = (outDir, runId) => join(outDir, `run-${runId}.json`);
 
+async function pathFor(outDir, runId) {
+  const direct = runPath(outDir, runId);
+  try { await readFile(direct); return direct; } catch { /* fall through */ }
+  for (const name of await readdir(outDir)) {
+    if (!name.startsWith("run-") || !name.endsWith(".json")) continue;
+    try { if (JSON.parse(await readFile(join(outDir, name), "utf8")).runId === runId) return join(outDir, name); } catch { /* skip */ }
+  }
+  return direct;
+}
+
 async function writeAtomic(path, data) {
   const tmp = `${path}.tmp`;
   await writeFile(tmp, JSON.stringify(data, null, 2));
@@ -35,7 +45,15 @@ export async function listRuns(outDir) {
 }
 
 export async function readRun(outDir, runId) {
-  return JSON.parse(await readFile(runPath(outDir, runId), "utf8"));
+  try {
+    return JSON.parse(await readFile(runPath(outDir, runId), "utf8"));
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    // Older logs were named by timestamp; find by the runId inside.
+    const found = (await listRuns(outDir)).find((r) => r.runId === runId);
+    if (!found) throw err;
+    return found;
+  }
 }
 
 /** A run for this Sentry issue that has not been undone — its artifacts still exist. */
@@ -77,7 +95,7 @@ export async function startRun({ source = "mock", issueId = null, outDir, integr
 export async function commitRun({ outDir, runId, integrations }) {
   const runLog = await readRun(outDir, runId);
   const step = await commitPage(runLog, integrations);
-  await writeAtomic(runPath(outDir, runId), runLog);
+  await writeAtomic(await pathFor(outDir, runId), runLog);
   return { runLog, step };
 }
 
@@ -91,6 +109,6 @@ export async function undoRun({ outDir, runId, integrations }) {
   const results = await undoRunLog(runLog, integrations);
   runLog.undoneAt = new Date().toISOString();
   runLog.undoResults = results;
-  await writeAtomic(runPath(outDir, runId), runLog);
+  await writeAtomic(await pathFor(outDir, runId), runLog);
   return { runLog, results };
 }

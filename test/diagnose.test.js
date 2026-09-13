@@ -38,6 +38,17 @@ test("diagnose falls back, and says why, when the model call throws or returns j
   assert.match(d2.fallbackReason, /parse/i);
 });
 
+test("diagnose tolerates prose or fences around the JSON object", async () => {
+  const callModel = async () => "Here is the diagnosis:
+```json
+{\"diagnosis\": \"x\", \"likelyCause\": \"y\", \"severity\": \"P3\", \"suggestedOwner\": \"z\", \"confidence\": 0.5}
+```
+Hope this helps.";
+  const d = await diagnose(trigger, { callModel, model: "m" });
+  assert.equal(d.fallback, false);
+  assert.equal(d.severity, "P3");
+});
+
 test("diagnose clamps severity to P1-P4 and confidence to 0-1", async () => {
   const callModel = async () => JSON.stringify({ diagnosis: "x", likelyCause: "y", severity: "SEV0", suggestedOwner: "z", confidence: 7 });
   const d = await diagnose(trigger, { callModel, model: "m" });

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, writeFile, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as runs from "./runs.js";
 
 /**
@@ -14,6 +15,7 @@ import * as runs from "./runs.js";
  *   POST /runs/:id/commit        fire the held PagerDuty page (the human approval)
  *   POST /runs/:id/undo          reverse the run
  *   GET  /healthz                { ok, queued, running, incompleteRuns }
+ *   GET  /                       a small UI over the same endpoints (src/ui.html)
  *
  * The queue is one worker, in order: two alerts for the same issue can't
  * race into two runs. Pending jobs are persisted under output/queue/ so a
@@ -101,6 +103,10 @@ export function createApp({ outDir, integrations, diagnoser, webhookSecret = pro
     const parts = url.pathname.split("/").filter(Boolean);
 
     try {
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/ui")) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(await readFile(fileURLToPath(new URL("./ui.html", import.meta.url)), "utf8"));
+      }
       if (req.method === "GET" && url.pathname === "/healthz") {
         const incomplete = await runs.findIncompleteRuns(outDir);
         return send(200, { ok: true, queued: queue.length, running: running?.id ?? null, incompleteRuns: incomplete.map((r) => r.runId) });
