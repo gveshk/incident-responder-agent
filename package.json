@@ -1,0 +1,22 @@
+{
+  "name": "incident-responder",
+  "version": "0.1.0",
+  "description": "Demo agent for the Multi-App AI Agent Hackathon: an Incident Responder whose every external action is independently verified (true/false/unknown) and reversible (4-tier rollback), proving a general-purpose trust layer any agent can adopt.",
+  "type": "module",
+  "bin": {
+    "incident-responder": "./bin/cli.js"
+  },
+  "main": "src/agent.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "test": "node --test",
+    "eval": "node eval/run-all.js"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.9.4"
+  },
+  "license": "MIT"
+}
