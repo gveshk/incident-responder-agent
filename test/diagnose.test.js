@@ -39,11 +39,7 @@ test("diagnose falls back, and says why, when the model call throws or returns j
 });
 
 test("diagnose tolerates prose or fences around the JSON object", async () => {
-  const callModel = async () => "Here is the diagnosis:
-```json
-{\"diagnosis\": \"x\", \"likelyCause\": \"y\", \"severity\": \"P3\", \"suggestedOwner\": \"z\", \"confidence\": 0.5}
-```
-Hope this helps.";
+  const callModel = async () => 'Here is the diagnosis:\n```json\n{"diagnosis": "x", "likelyCause": "y", "severity": "P3", "suggestedOwner": "z", "confidence": 0.5}\n```\nHope this helps.';
   const d = await diagnose(trigger, { callModel, model: "m" });
   assert.equal(d.fallback, false);
   assert.equal(d.severity, "P3");
