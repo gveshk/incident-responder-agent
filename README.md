@@ -157,6 +157,15 @@ undo(actResult)         -> { ok, compensationType: "restored"|"compensated"|"esc
 
 and register its action types in `TIER_BY_ACTION_TYPE`. `src/agent.js` orchestrates; it takes integrations as an injected object, so the same orchestrator runs against real APIs, fakes, or a fault-injecting harness.
 
+## How we tested reliability
+
+Four layers, cheapest to most real:
+
+1. **Unit tests** — `npm test`, 113 tests, every module, all external calls mocked (`test/`).
+2. **Evals on the layer itself** — `npm run eval`: silent-failure catch rate, rollback fidelity, memory accuracy, tri-state coverage, confidence calibration, an adversarial check. Numbers below.
+3. **Competitive benchmark** — `npm run eval:competitive`: nine shipping tools' documented defaults vs this layer on the same seeded fault schedule, scored against ground truth. Numbers and caveats in the next section and in [`eval/competitive/RESULTS.md`](eval/competitive/RESULTS.md).
+4. **Live runs against the real apps** — every integration was exercised create → verify → undo on real accounts, then re-read independently to confirm nothing was left behind. The first live runs caught three bugs in our own integrations through the layer's own verification ("What the first live run caught", below). The recorded demo is one such run, unedited.
+
 ## Evals: the layer proves its own reliability
 
 `npm run eval` reports real numbers, not vibes:
