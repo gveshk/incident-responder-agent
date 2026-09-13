@@ -48,6 +48,7 @@
 <div id="toast" class="toast"></div>
 <script>
 const $ = (s, el = document) => el.querySelector(s);
+let lastHtml = null;
 const toast = (m) => { const t = $("#toast"); t.textContent = m; t.style.display = "block"; setTimeout(() => (t.style.display = "none"), 2600); };
 const api = async (method, path, body) => { const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); return r.json(); };
 
@@ -93,7 +94,9 @@ async function refresh() {
   $("#health").textContent = health.running ? "running…" : health.queued ? `${health.queued} queued` : "idle";
   $("#health").className = "pill " + (health.running || health.queued ? "running" : "");
   const full = await Promise.all(list.slice(0, 6).map((r) => api("GET", `/runs/${r.runId}`)));
-  $("#runs").innerHTML = full.length ? full.map(renderRun).join("") : `<div class="empty">No runs yet. Trigger one, or resolve → unresolve an issue in Sentry.</div>`;
+  const html = full.length ? full.map(renderRun).join("") : `<div class="empty">No runs yet. Trigger one, or resolve → unresolve an issue in Sentry.</div>`;
+  // Only touch the DOM when something changed — a re-render mid-click swaps the node out from under the pointer.
+  if (html !== lastHtml) { $("#runs").innerHTML = html; lastHtml = html; }
 }
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b) return;
