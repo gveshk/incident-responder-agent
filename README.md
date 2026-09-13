@@ -6,6 +6,8 @@ A demo agent for the Multi-App AI Agent Hackathon, built to prove one idea:
 
 The agent itself is deliberately simple — one incident-response flow from a Sentry issue across Linear, Sentry, Slack, HubSpot, PagerDuty, and GitHub, with a cheap open model (DeepSeek via OpenRouter) writing the diagnosis. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
 
+**What the trust layer is.** A thin runtime that sits between an agent and the apps it writes to. For every write it (1) re-reads the result through a different path and returns `true` / `false` / `unknown`, never a bare boolean, with `unknown` escalated to a human instead of retried; (2) classifies the action by reversibility — reversible, compensable, bufferable (held until a human commits), irreversible — and can undo it accordingly; (3) revises its memory when a fact is contradicted, keeping the old value visible; and (4) records all of it in a run log that is enough on its own to re-verify or reverse the run. An app plugs in with three functions: `act`, `verify`, `undo`.
+
 ## Demo
 
 **Pitch video (2 min):** [youtu.be/YufTP5n542Q](https://youtu.be/YufTP5n542Q) · **Demo video (2 min):** [`demos/incident-responder/output/final-demo.mp4`](demos/incident-responder/output/final-demo.mp4) — recorded against the live systems, nothing mocked: a real Sentry issue → DeepSeek diagnosis → Linear, Sentry, Slack, HubSpot, GitHub → the held PagerDuty page committed by a human → everything undone.
