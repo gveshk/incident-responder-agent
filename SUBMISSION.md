@@ -18,4 +18,4 @@ The run log is the state: intent, API result, verdict and tier per step, written
 
 - Repo: https://github.com/gveshk/incident-responder-agent
 - Demo video (2 min, recorded against the live systems): `demos/incident-responder/output/final-demo.mp4` (GIF in the README)
-- Pitch video (2 min): _link in the README_
+- Pitch video (2 min): https://youtu.be/YufTP5n542Q

@@ -8,11 +8,13 @@ The agent itself is deliberately simple — one incident-response flow from a Se
 
 ## Demo
 
-**Pitch video (2 min):** _link coming_ · **Demo video (2 min):** [`demos/incident-responder/output/final-demo.mp4`](demos/incident-responder/output/final-demo.mp4) — recorded against the live systems, nothing mocked: a real Sentry issue → DeepSeek diagnosis → Linear, Sentry, Slack, HubSpot, GitHub → the held PagerDuty page committed by a human → everything undone.
+**Pitch video (2 min):** [youtu.be/YufTP5n542Q](https://youtu.be/YufTP5n542Q) · **Demo video (2 min):** [`demos/incident-responder/output/final-demo.mp4`](demos/incident-responder/output/final-demo.mp4) — recorded against the live systems, nothing mocked: a real Sentry issue → DeepSeek diagnosis → Linear, Sentry, Slack, HubSpot, GitHub → the held PagerDuty page committed by a human → everything undone.
 
 <!-- To get an inline player WITH audio: edit this file on github.com, drag final-demo.mp4 into the editor,
      and paste the https://github.com/user-attachments/assets/... URL it produces on its own line, replacing the GIF below.
      A repo-hosted .mp4 path never renders as a player; only attachment URLs do. -->
+[![Pitch video](https://img.youtube.com/vi/YufTP5n542Q/hqdefault.jpg)](https://youtu.be/YufTP5n542Q)
+
 ![Incident Responder demo](demos/incident-responder/output/final-demo.gif)
 
 *Recorded with [aidemo](https://github.com/tandryukha/aidemo): the storyboard is code (`demos/incident-responder/generated/storyboard.json`), replayed deterministically in Chrome, narrated by a local Kokoro voice. `SUBMISSION.md` has the written brief.*
