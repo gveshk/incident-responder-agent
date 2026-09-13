@@ -3,9 +3,9 @@ import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../src/env.js";
-import { runIncident, undoRun } from "../src/agent.js";
+import { runIncident, undoRun, commitPage } from "../src/agent.js";
 import { createFactStore } from "../src/memory.js";
-import { fetchTrigger } from "../src/integrations/sentry.js";
+import { fetchTrigger, fetchLatestEvent } from "../src/integrations/sentry.js";
 import { buildMockSentryPayload } from "../src/mock-trigger.js";
 
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -22,6 +22,27 @@ async function main() {
   const args = process.argv.slice(2);
   const outDir = join(packageDir, "output");
   await mkdir(outDir, { recursive: true });
+
+  if (args[0] === "--commit") {
+    const runLogPath = args[1];
+    if (!runLogPath) {
+      console.error("Usage: node bin/cli.js --commit <run-log-path>   (fires the held PagerDuty page)");
+      process.exitCode = 1;
+      return;
+    }
+    const missingPd = ["PAGERDUTY_API_KEY", "PAGERDUTY_SERVICE_ID", "PAGERDUTY_FROM_EMAIL"].filter((k) => !process.env[k]);
+    if (missingPd.length) {
+      console.error(`Missing required env vars: ${missingPd.join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const runLog = JSON.parse(await readFile(runLogPath, "utf8"));
+    const step = await commitPage(runLog);
+    await writeFile(runLogPath, JSON.stringify(runLog, null, 2));
+    console.log(`PagerDuty page COMMITTED: incident #${step.actResult.raw.number} ${step.actResult.raw.url}`);
+    console.log(`  pagerduty.incidentCreate [compensable]: verify=${step.verifyResult.status} (confidence=${step.verifyResult.confidence.toFixed(2)})`);
+    return;
+  }
 
   if (args[0] === "--undo") {
     const runLogPath = args[1];
@@ -66,16 +87,21 @@ async function main() {
     console.log(`Trigger: Sentry ${trigger.sentryShortId} — ${trigger.errorType} (${trigger.eventCount} events, owner ${trigger.reportedOwner}) ${trigger.sentryUrl}`);
   }
 
-  const runLog = await runIncident({ trigger, factStore });
+  const event = trigger.sentryIssueId ? await fetchLatestEvent(trigger.sentryIssueId) : null;
+  const runLog = await runIncident({ trigger, factStore, event });
   const outPath = join(outDir, `run-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
   await writeFile(outPath, JSON.stringify(runLog, null, 2));
 
   console.log(`Incident run complete. ${runLog.steps.length} steps logged.`);
   for (const step of runLog.steps) {
-    if (step.verifyResult) {
+    if (step.actionType === "llm.diagnose") {
+      console.log(step.fallback
+        ? `  llm.diagnose: FALLBACK to template (${step.fallbackReason})`
+        : `  llm.diagnose [${step.model}]: ${step.severity} — ${step.diagnosis}${step.likelyCause ? ` | likely cause: ${step.likelyCause}` : ""} (confidence=${step.confidence})`);
+    } else if (step.verifyResult) {
       console.log(`  ${step.actionType} [${step.tier}]: verify=${step.verifyResult.status} (confidence=${step.verifyResult.confidence.toFixed(2)})`);
     } else if (step.held) {
-      console.log(`  ${step.actionType} [${step.tier}]: HELD (not fired) — ${step.intent.reason}`);
+      console.log(`  ${step.actionType} [${step.tier}]: HELD (not fired) — ${step.intent.reason}. Fire it with: node bin/cli.js --commit <this run log>`);
     } else if (step.actionType === "memory.reconcile") {
       console.log(`  memory.reconcile: revised=${step.revised}${step.revised ? ` (was "${step.oldFact.object}", now "${step.newFact.object}")` : ""}`);
     }

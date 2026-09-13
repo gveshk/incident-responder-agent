@@ -4,7 +4,7 @@ A demo agent for the Multi-App AI Agent Hackathon, built to prove one idea:
 
 > **Every action an agent takes gets logged, classified, independently verified, and is reversible.** Git blame and git revert, for the real world your agent touches.
 
-The agent itself is deliberately simple — one incident-response flow from a Sentry issue across Linear, Sentry, Slack, HubSpot, and GitHub. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
+The agent itself is deliberately simple — one incident-response flow from a Sentry issue across Linear, Sentry, Slack, HubSpot, PagerDuty, and GitHub, with a cheap open model (DeepSeek via OpenRouter) writing the diagnosis. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
 
 ![Trust layer architecture](diagrams/trust-layer-architecture.png)
 
@@ -18,6 +18,9 @@ A Sentry issue kicks off one incident-response cycle — the canned "error spike
 Sentry trigger       mock payload, or --sentry: latest real unresolved issue
       │
       ▼
+llm.diagnose         DeepSeek reads the issue + stack frames → diagnosis, cause, severity
+      │              (not verified — it's prose; logged with model + prompt hash, falls back to a template and says so)
+      ▼
 Linear ticket        act ─► verify                          [reversible]
       │
       ▼
@@ -30,7 +33,7 @@ Slack alert          act ─► verify                          [compensable]
 HubSpot account      pre-state captured ─► act ─► verify    [reversible]
       │
       ▼
-PagerDuty page       HELD, never fired                      [bufferable]
+PagerDuty page       HELD at the gate; fired only by --commit   [bufferable → compensable once committed]
       │
       ▼
 memory.reconcile     stale fact revised, old value kept visible
@@ -65,7 +68,7 @@ Canonicalization absorbs the ways real APIs rewrite content (Slack wraps URLs in
 |---|---|---|
 | `reversible` | undo restores the pre-state | Linear ticket, GitHub issue → deleted; HubSpot property → captured value written back |
 | `compensable` | the artifact can be removed, but the effect (someone read it) can't be un-happened | Slack message → deleted, or a threaded retraction if delete fails |
-| `bufferable` | never fired; held at a gate until an explicit `commit()` | PagerDuty page — the demo never commits it |
+| `bufferable` | never fired; held at a gate until an explicit `commit()` | PagerDuty page — a run only *holds* it; `--commit <run-log>` fires it through `hold().commit()`, after which it is compensable (undo resolves the incident, cannot un-page anyone) |
 | `irreversible` | no undo can be offered; must be gated up front | not used in this demo |
 
 Rollback outcomes are `restored`, `compensated`, `held-not-fired`, or `escalated` — compensation itself can fail against a third-party API, and that's a terminal state that gets reported, never swallowed.
@@ -199,8 +202,8 @@ The trust layer, yes — it has been exercised live against five real APIs and d
 
 What is still demo-grade, stated plainly:
 
-- **No reasoning.** The diagnosis text is templated from the issue. A production responder would have a model read the stack trace and write the diagnosis — the trust layer is indifferent to that; it verifies actions, not prose.
-- **PagerDuty is held, never committed.** The bufferable gate is real (`hold().commit()` exists), but the demo never calls `commit()`. A real deployment would put a human approval in front of it.
+- **The diagnosis is the one unverified step.** A model (`deepseek/deepseek-v4-flash` via OpenRouter, ~$0.05/M tokens) reads the issue and the latest event's stack frames and writes diagnosis, likely cause and severity as JSON. The trust layer verifies actions, not prose, so instead the run log records the model id, a hash of the exact prompt, and — if the model is unconfigured, errors, or returns junk — that it fell back to the template and why. Never a silent fallback. The model's severity sets the `[P1..P4]` prefix on every ticket; the memory step still uses the alerting system's owner, not the model's guess.
+- **PagerDuty is held by default, and the commit is a human's click.** `node bin/cli.js --commit <run-log>` is that click: it fires the page through `hold().commit()`, verifies it by listing incidents by `incident_key` (a different path than the create response), and refuses a second commit. Once committed the page is compensable: `--undo` resolves the incident but cannot un-wake whoever was paged — and the log says exactly that.
 - **Wrong-record blind spot.** If an API stores a write under an id it never returns, the layer reports `false` but cannot reverse what it cannot address (see benchmark caveats).
 - **Single process, `.env` secrets, no rate-limit handling.** It is a CLI, not a service.
 
@@ -211,16 +214,17 @@ Requires Node ≥ 20 and the `gh` CLI, authenticated.
 ```bash
 npm install
 cp .env.example .env     # fill in LINEAR_PERSONAL_ACCESS_KEY and SLACK_BOT_TOKEN
-npm test                 # 83 unit tests, all mocked
+npm test                 # 96 unit tests, all mocked
 npm run eval             # the 5 evals + adversarial check
 npm run eval:competitive # the 9-product benchmark; regenerates eval/competitive/RESULTS.md
 
 node bin/cli.js                              # one live run from the mock trigger → output/run-<ts>.json
 node bin/cli.js --sentry                     # same, triggered by your latest real unresolved Sentry issue
+node bin/cli.js --commit output/run-<ts>.json  # fire the held PagerDuty page (the human approval step)
 node bin/cli.js --undo output/run-<ts>.json  # reverse it, step by step, most recent first
 ```
 
-Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property). For `--sentry`: `SENTRY_AUTH_TOKEN` (user token with `event:read`, `event:write`, `project:read`) and `SENTRY_ORG`.
+Env vars: `LINEAR_PERSONAL_ACCESS_KEY`, `LINEAR_TEAM_ID`, `SLACK_BOT_TOKEN` (bot must be invited to the alert channel; scopes `chat:write`, `channels:history`), `SLACK_ALERT_CHANNEL`, `GITHUB_DEMO_REPO`, `HUBSPOT_PRIVATE_APP_TOKEN` (private app, scopes `crm.objects.companies.read` + `.write`), `HUBSPOT_DEMO_COMPANY_ID` (a company; the account needs a custom `incident_status` company property). For `--sentry`: `SENTRY_AUTH_TOKEN` (user token with `event:read`, `event:write`, `project:read`) and `SENTRY_ORG`. For the model diagnosis: `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (default `deepseek/deepseek-v4-flash`; without a key the diagnosis falls back to the template and the log says so). For `--commit`: `PAGERDUTY_API_KEY` (REST API key), `PAGERDUTY_SERVICE_ID`, `PAGERDUTY_FROM_EMAIL` (a user on the account).
 
 ## Layout
 
@@ -231,8 +235,9 @@ src/verifier.js            tri-state verify + canonicalization (pure)
 src/rollback.js            tiers, hold(), rollback(), agent-writable diff
 src/memory.js              fact store with supersededBy revision
 src/mock-trigger.js        canned Sentry payload
-src/integrations/          linear.js, github.js, slack.js, hubspot.js, sentry.js — act / verify / undo
-                           (sentry.js also exports fetchTrigger for the --sentry path)
+src/diagnose.js            model diagnosis via OpenRouter, injectable, audited fallback
+src/integrations/          linear.js, github.js, slack.js, hubspot.js, sentry.js, pagerduty.js — act / verify / undo
+                           (sentry.js also exports fetchTrigger + fetchLatestEvent for the --sentry path)
 eval/                      fault-injection, rollback-fidelity, memory-scenarios,
                            tri-state-coverage, calibration, adversarial, latency-cost
 eval/competitive/          simulator (seeded faults + ground truth), strategies, memory-bench, run

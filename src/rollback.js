@@ -24,6 +24,7 @@ const TIER_BY_ACTION_TYPE = {
   "hubspot.propertyUpdate": TIERS.REVERSIBLE,
   "sentry.noteCreate": TIERS.REVERSIBLE,
   "slack.postMessage": TIERS.COMPENSABLE,
+  "pagerduty.incidentCreate": TIERS.COMPENSABLE, // a committed page: resolvable, not un-sendable
   "pagerduty.page": TIERS.BUFFERABLE,
 };
 

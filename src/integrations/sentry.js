@@ -51,6 +51,18 @@ export async function fetchTrigger({ org = process.env.SENTRY_ORG } = {}) {
   };
 }
 
+/** Latest event's message and innermost stack frames, for the diagnoser. Best-effort: null on any failure. */
+export async function fetchLatestEvent(issueId) {
+  try {
+    const e = await sentryRequest("GET", `/issues/${issueId}/events/latest/`);
+    const exc = e.entries?.find((x) => x.type === "exception");
+    const frames = (exc?.data?.values?.[0]?.stacktrace?.frames ?? []).slice(-6).map((f) => `${f.filename}:${f.lineNo} in ${f.function}`);
+    return { message: e.message || e.title || null, frames };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Sentry as an ACTION target: a note on the issue linking the ticket.
  * Reversible — the note can be deleted outright.
