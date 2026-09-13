@@ -13,7 +13,8 @@
   "scripts": {
     "start": "node bin/cli.js",
     "test": "node --test",
-    "eval": "node eval/run-all.js"
+    "eval": "node eval/run-all.js",
+    "eval:competitive": "node eval/competitive/run.js"
   },
   "dependencies": {
     "@slack/web-api": "^7.9.4"
