@@ -1,4 +1,5 @@
 output/
+!demos/incident-responder/output/
 node_modules/
 .env
 tools/

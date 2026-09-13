@@ -6,6 +6,14 @@ A demo agent for the Multi-App AI Agent Hackathon, built to prove one idea:
 
 The agent itself is deliberately simple — one incident-response flow from a Sentry issue across Linear, Sentry, Slack, HubSpot, PagerDuty, and GitHub, with a cheap open model (DeepSeek via OpenRouter) writing the diagnosis. The interesting part is the **trust layer** underneath it, which any agent that mutates external systems can adopt. It's modular, has no dependency on the agent, and will be open-sourced separately after the hackathon.
 
+## Demo
+
+**Pitch video (2 min):** _link coming_ · **Demo video (2 min):** [`demos/incident-responder/output/final-demo.mp4`](demos/incident-responder/output/final-demo.mp4) — recorded against the live systems, nothing mocked: a real Sentry issue → DeepSeek diagnosis → Linear, Sentry, Slack, HubSpot, GitHub → the held PagerDuty page committed by a human → everything undone.
+
+![Incident Responder demo](demos/incident-responder/output/final-demo.gif)
+
+*Recorded with [aidemo](https://github.com/tandryukha/aidemo): the storyboard is code (`demos/incident-responder/generated/storyboard.json`), replayed deterministically in Chrome, narrated by a local Kokoro voice. `SUBMISSION.md` has the written brief.*
+
 ![Trust layer architecture](diagrams/trust-layer-architecture.png)
 
 *Editable sources: [`diagrams/trust-layer-architecture.excalidraw`](diagrams/trust-layer-architecture.excalidraw) (open at excalidraw.com) and the `.mmd` mermaid next to it.*
