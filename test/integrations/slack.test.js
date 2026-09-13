@@ -14,6 +14,7 @@ function fakeClient({ historyMessages = [], deleteThrows = false } = {}) {
     conversations: {
       history: async () => ({ messages: historyMessages }),
     },
+    auth: { test: async () => ({ url: "https://x.slack.com/" }) },
   };
 }
 
@@ -22,6 +23,7 @@ test("act() posts a message and returns its ts as id", async () => {
   const result = await act({ text: "incident alert" }, { client: fakeClient() });
   assert.equal(result.id, "1700000000.000100");
   assert.equal(result.raw.channel, "C0BF5V41066");
+  assert.equal(result.raw.url, "https://x.slack.com/archives/C0BF5V41066/p1700000000000100");
 });
 
 test("verify() returns true when conversations.history finds the message", async () => {

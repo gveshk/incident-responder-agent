@@ -21,6 +21,7 @@ test("act() captures the pre-state, then PATCHes the property", async () => {
     [
       { id: "co-1", properties: { incident_status: "normal" } }, // GET before
       { id: "co-1", properties: { incident_status: "investigating" } }, // PATCH
+      { portalId: 42 }, // account-info for the link
     ],
     async (calls) => {
       const result = await act({ objectId: "co-1", property: "incident_status", value: "investigating" });
@@ -29,6 +30,7 @@ test("act() captures the pre-state, then PATCHes the property", async () => {
       assert.equal(calls[0].method, "GET");
       assert.equal(calls[1].method, "PATCH");
       assert.deepEqual(calls[1].body, { properties: { incident_status: "investigating" } });
+      assert.equal(result.raw.url, "https://app.hubspot.com/contacts/42/company/co-1");
     },
   );
 });

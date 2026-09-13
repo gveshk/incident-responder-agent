@@ -12,8 +12,15 @@ function client(injected) {
 export async function act(input, { client: injected } = {}) {
   const channel = input.channel ?? process.env.SLACK_ALERT_CHANNEL;
   if (!channel) throw new Error("SLACK_ALERT_CHANNEL is not set and no channel was passed");
-  const res = await client(injected).chat.postMessage({ channel, text: input.text });
-  return { id: res.ts, raw: { channel, ts: res.ts }, capturedBefore: null };
+  const c = client(injected);
+  const res = await c.chat.postMessage({ channel, text: input.text });
+  // A permalink for humans (the UI / run log); verification never uses it.
+  let url = null;
+  try {
+    const { url: workspace } = await c.auth.test();
+    url = `${workspace.replace(/\/$/, "")}/archives/${channel}/p${res.ts.replace(".", "")}`;
+  } catch { /* cosmetic only */ }
+  return { id: res.ts, raw: { channel, ts: res.ts, url }, capturedBefore: null };
 }
 
 export async function verify(actResult, intent, { client: injected } = {}) {

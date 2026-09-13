@@ -3,10 +3,10 @@ import { verify as verifyCore } from "../verifier.js";
 // Companies, not contacts: an incident affects a customer account.
 const HUBSPOT_API_URL = "https://api.hubapi.com/crm/v3/objects/companies";
 
-async function hubspotRequest(method, path, body) {
+async function hubspotRequest(method, path, body, base = HUBSPOT_API_URL) {
   const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
   if (!token) throw new Error("HUBSPOT_PRIVATE_APP_TOKEN is not set");
-  const res = await fetch(`${HUBSPOT_API_URL}${path}`, {
+  const res = await fetch(`${base}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
@@ -29,9 +29,14 @@ export async function act(input) {
   if (!objectId) throw new Error("HUBSPOT_DEMO_COMPANY_ID is not set and no objectId was passed");
   const before = await hubspotRequest("GET", `/${objectId}?properties=${input.property}`);
   const data = await hubspotRequest("PATCH", `/${objectId}`, { properties: { [input.property]: input.value } });
+  let url = null;
+  try {
+    const { portalId } = await hubspotRequest("GET", "", null, "https://api.hubapi.com/account-info/v3/details");
+    url = `https://app.hubspot.com/contacts/${portalId}/company/${data.id}`;
+  } catch { /* cosmetic only */ }
   return {
     id: data.id,
-    raw: { property: input.property, value: input.value, url: `https://app.hubspot.com/contacts/${data.id}` },
+    raw: { property: input.property, value: input.value, url },
     capturedBefore: { [input.property]: before.properties?.[input.property] ?? null },
   };
 }
